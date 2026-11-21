@@ -85,7 +85,7 @@ def get_live_cmp(symbol):
     except Exception:
         pass
     return 0.0
-" भाग २ (Part 2 of 3): कर (Taxes), व्याज आणि पोझिशन सायझिंग गणना "
+# " भाग २ (Part 2 of 3): कर (Taxes), व्याज आणि पोझिशन सायझिंग गणना "
 def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct, margin_pct):
     m_dec = margin_pct / 100.0
     leverage = round(1.0 / m_dec, 2) if m_dec > 0 else 1.0
@@ -147,7 +147,7 @@ def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct,
         "taxes": taxes, "total_charges": total_charges, "breakeven": breakeven,
         "net_profit": net_profit, "net_loss": net_loss, "roi": roi
     }
-"भाग ३ (Part 3 of 3): मोबाईल डॅशबोर्ड UI आणि सर्व टॅब्स"
+# "भाग ३ (Part 3 of 3): मोबाईल डॅशबोर्ड UI आणि सर्व टॅब्स"
 
 def render_app():
     st.title("📈 Nifty 500 MTF & MIS Pro")
