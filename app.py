@@ -106,8 +106,7 @@ def fetch_latest_gdrive_reports():
         daily_res = service.files().list(q=q_daily, fields="files(id)").execute().get("files", [])
         if not daily_res:
             return None, [], "Drive वर '01_Daily_Reports' फोल्डर सापडले नाही."
-
-        daily_id = daily_res[0]["id"]
+        daily_id = next(iter(daily_res))["id"]
 
         # सर्वात ताजे तारीख फोल्डर शोधणे
         q_dates = f"'{daily_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
@@ -117,7 +116,8 @@ def fetch_latest_gdrive_reports():
         if not date_folders:
             return None, [], "अजून कोणतेही तारीख फोल्डर तयार झालेले नाही."
 
-        latest_folder = date_folders[0]
+        latest_folder = next(iter(date_folders))
+
         folder_ids = [latest_folder["id"]]
 
         # आतील सब-फोल्डर्स (Full_Market_Scan, Sector_and_Breadth इ.) शोधणे
