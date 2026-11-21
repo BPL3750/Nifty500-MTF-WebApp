@@ -1,17 +1,18 @@
-
-"भाग १ (Part 1 of 3): सेटअप, डेटा लोडिंग आणि Live CMP"
-
 import os
-import json
 import io
+import json
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
 st.set_page_config(page_title="Nifty 500 MTF & MIS Pro", page_icon="📈", layout="centered")
 
 NIFTY_FILE = "Nifty_500_Stocks.xlsx"
 MARGIN_FILE = "Zerodha_Dhan Margin Calculator.xlsx"
+DEFAULT_DRIVE_FOLDER_ID = "11vyLILBunUtCb0CDWDx2yTLtYVOShatO"
 
 
 @st.cache_data(ttl=3600)
@@ -85,7 +86,58 @@ def get_live_cmp(symbol):
     except Exception:
         pass
     return 0.0
-# " भाग २ (Part 2 of 3): कर (Taxes), व्याज आणि पोझिशन सायझिंग गणना "
+
+
+@st.cache_data(ttl=900)
+def fetch_latest_gdrive_reports():
+    """Streamlit Secrets मधून सुरक्षितपणे Google Drive वरील ताजे स्कॅन रिपोर्ट्स वाचणे"""
+    if "GDRIVE_TOKEN_JSON" not in st.secrets:
+        return None, [], "Google Drive जोडलेले नाही (खालील सूचनांनुसार Streamlit Secrets मध्ये Token टाका)."
+
+    try:
+        token_info = json.loads(st.secrets["GDRIVE_TOKEN_JSON"])
+        root_id = st.secrets.get("GDRIVE_FOLDER_ID", DEFAULT_DRIVE_FOLDER_ID)
+        scopes = ["https://googleapis.com"]
+        creds = Credentials.from_authorized_user_info(token_info, scopes)
+        service = build("drive", "v3", credentials=creds)
+
+        # 01_Daily_Reports फोल्डर शोधणे
+        q_daily = f"name='01_Daily_Reports' and '{root_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        daily_res = service.files().list(q=q_daily, fields="files(id)").execute().get("files", [])
+        if not daily_res:
+            return None, [], "Drive वर '01_Daily_Reports' फोल्डर सापडले नाही."
+
+        daily_id = daily_res[0]["id"]
+
+        # सर्वात ताजे तारीख फोल्डर शोधणे
+        q_dates = f"'{daily_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        date_folders = service.files().list(
+            q=q_dates, orderBy="createdTime desc", pageSize=5, fields="files(id, name)"
+        ).execute().get("files", [])
+        if not date_folders:
+            return None, [], "अजून कोणतेही तारीख फोल्डर तयार झालेले नाही."
+
+        latest_folder = date_folders[0]
+        folder_ids = [latest_folder["id"]]
+
+        # आतील सब-फोल्डर्स (Full_Market_Scan, Sector_and_Breadth इ.) शोधणे
+        q_subs = f"'{latest_folder['id']}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        sub_folders = service.files().list(q=q_subs, fields="files(id, name)").execute().get("files", [])
+        for sf in sub_folders:
+            folder_ids.append(sf["id"])
+
+        report_files = []
+        for fid in folder_ids:
+            q_files = f"'{fid}' in parents and trashed=false and (name contains '.xlsx' or name contains '.csv')"
+            items = service.files().list(q=q_files, fields="files(id, name)").execute().get("files", [])
+            for it in items:
+                if "Calculator" not in it["name"]:
+                    report_files.append(it)
+
+        return latest_folder["name"], report_files, service
+    except Exception as e:
+        return None, [], f"Drive कनेक्शन त्रुटी: {e}"
+
 def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct, margin_pct):
     m_dec = margin_pct / 100.0
     leverage = round(1.0 / m_dec, 2) if m_dec > 0 else 1.0
@@ -99,7 +151,6 @@ def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct,
     trade_val = safe_qty * entry
     margin_used = trade_val * m_dec
     funded_amt = max(0.0, trade_val - margin_used) if product == "MTF Swing" else 0.0
-
     danger_price = round(entry * (1 - m_dec * 0.5), 2) if product == "MTF Swing" else round(entry * (1 - m_dec * 0.6), 2)
 
     sell_val = safe_qty * t2
@@ -109,7 +160,8 @@ def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct,
             "safe_qty": 0, "trade_val": 0.0, "margin_used": 0.0, "funded_amt": 0.0,
             "danger_price": danger_price, "brokerage": 0.0, "interest": 0.0,
             "taxes": 0.0, "total_charges": 0.0, "breakeven": entry,
-            "net_profit": 0.0, "net_loss": 0.0, "roi": 0.0
+            "net_profit": 0.0, "net_loss": 0.0, "roi": 0.0,
+            "half_qty": 0, "rem_qty": 0, "p1_profit": 0.0, "p2_profit": 0.0, "partial_total": 0.0
         }
 
     if product == "MTF Swing":
@@ -139,26 +191,39 @@ def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct,
     net_loss = round(((sl - entry) * safe_qty) - total_charges, 2)
     roi = round((net_profit / margin_used) * 100, 2) if margin_used > 0 else 0.0
 
+    # ५०% अर्धा नफा बुकिंग गणना
+    half_qty = safe_qty // 2
+    rem_qty = safe_qty - half_qty
+    half_cost = round(total_charges * 0.5, 2)
+    p1_profit = round(((t1 - entry) * half_qty) - half_cost, 2) if half_qty > 0 else 0.0
+    p2_profit = round(((t2 - entry) * rem_qty) - half_cost, 2) if rem_qty > 0 else 0.0
+    partial_total = round(p1_profit + p2_profit, 2)
+
     return {
         "leverage": leverage, "buying_power": buying_power, "max_qty": max_qty,
         "safe_qty": safe_qty, "trade_val": trade_val, "margin_used": margin_used,
         "funded_amt": funded_amt, "danger_price": danger_price,
         "brokerage": round(brokerage, 2), "interest": interest,
         "taxes": taxes, "total_charges": total_charges, "breakeven": breakeven,
-        "net_profit": net_profit, "net_loss": net_loss, "roi": roi
+        "net_profit": net_profit, "net_loss": net_loss, "roi": roi,
+        "half_qty": half_qty, "rem_qty": rem_qty,
+        "p1_profit": p1_profit, "p2_profit": p2_profit, "partial_total": partial_total
     }
-# "भाग ३ (Part 3 of 3): मोबाईल डॅशबोर्ड UI आणि सर्व टॅब्स"
 
 def render_app():
     st.title("📈 Nifty 500 MTF & MIS Pro")
-    st.caption("Dhan आणि Zerodha पोझिशन सायझिंग, कर, व्याज व Trailing SL प्लॅनर")
+    st.caption("Dhan आणि Zerodha पोझिशन सायझिंग, ५०% प्रॉफिट बुकिंग, Trailing SL व लाइव्ह ब्रेकआऊट स्कॅनर")
 
     df_stocks = load_stocks_and_margins()
     if df_stocks.empty:
         st.error("Nifty_500_Stocks.xlsx सापडली नाही! कृपया GitHub रेपॉझिटरी तपासा.")
         return
 
-    tab1, tab2 = st.tabs(["🧮 MTF / MIS कॅल्क्युलेटर", "📊 सर्व ५०० शेअर्स मार्जिन यादी"])
+    tab1, tab2, tab3 = st.tabs([
+        "🧮 MTF / MIS कॅल्क्युलेटर",
+        "🚀 आजचे ब्रेकआऊट रिपोर्ट्स",
+        "📊 ५०० शेअर्स मार्जिन यादी"
+    ])
 
     with tab1:
         col_b, col_p = st.columns(2)
@@ -211,6 +276,15 @@ def render_app():
         if product == "MTF Swing":
             st.warning(f"🚨 **MTF Margin Call धोक्याची किंमत:** ₹{active['danger_price']:,.2f} (फंडिंग रक्कम: ₹{active['funded_amt']:,.0f})")
 
+        st.subheader("💰 ५०% अर्धा नफा बुकिंग प्लॅनर (Partial Profit Booking)")
+        partial_df = pd.DataFrame({
+            "टप्पा (Stage)": ["टप्पा १: Target 1 (50% Book)", "टप्पा २: Target 2 (उरलेले 50%)", "एकूण एकत्रित निव्वळ नफा (Total)"],
+            "विक्री किंमत (₹)": [f"₹{t1:,.2f}", f"₹{t2:,.2f}", "-"],
+            "शेअर संख्या (Qty)": [f"{active['half_qty']} शेअर्स", f"{active['rem_qty']} शेअर्स", f"{active['safe_qty']} शेअर्स"],
+            "निव्वळ नफा (Net Profit ₹)": [f"₹{active['p1_profit']:,.2f}", f"₹{active['p2_profit']:,.2f}", f"₹{active['partial_total']:,.2f}"]
+        })
+        st.dataframe(partial_df, use_container_width=True, hide_index=True)
+
         st.subheader("⚔️ Dhan विरुद्ध Zerodha थेट तुलना (Safe Qty)")
         comp_df = pd.DataFrame({
             "तपशील": ["मार्जिन %", "ब्रोकरेज (₹)", "MTF व्याज (₹)", "सरकारी कर व DP (₹)", "एकूण खर्च (₹)", "Target 2 निव्वळ नफा (₹)"],
@@ -235,6 +309,47 @@ def render_app():
         st.dataframe(tsl_df, use_container_width=True, hide_index=True)
 
     with tab2:
+        st.subheader("🚀 Google Drive वरील आजचे ब्रेकआऊट आणि सेक्टर रिपोर्ट्स")
+        folder_date, rep_files, service_or_msg = fetch_latest_gdrive_reports()
+
+        if not folder_date:
+            st.info(service_or_msg)
+            st.markdown("""
+            **Google Drive जोडण्यासाठी (फक्त १ मिनिटाचे काम):**
+            1. तुमची रेपॉझिटरी **Public** असल्यामुळे कधीही `token.json` फाईल GitHub वर टाकू नका.
+            2. त्याऐवजी **Streamlit Cloud -> तुमच्या App चे `Settings` -> `Secrets`** उघडा.
+            3. तेथे तुमच्या `C:\\NSE-Stock-Automation\\token.json` मधील मजकूर खालीलप्रमाणे पेस्ट करा:
+            ```toml
+            GDRIVE_FOLDER_ID = "11vyLILBunUtCb0CDWDx2yTLtYVOShatO"
+            GDRIVE_TOKEN_JSON = '''येथे_तुमचा_token.json_मजकूर_पेस्ट_करा'''
+            ```
+            """)
+        elif not rep_files:
+            st.warning(f"📅 **{folder_date}** फोल्डरमध्ये कोणताही Excel/CSV रिपोर्ट सापडला नाही.")
+        else:
+            st.success(f"📅 ताजे रिपोर्ट्स लोड झाले आहेत: **{folder_date}**")
+            file_map = {f["name"]: f["id"] for f in rep_files}
+            chosen_name = st.selectbox("रिपोर्ट निवडा", list(file_map.keys()))
+
+            if chosen_name:
+                request = service_or_msg.files().get_media(fileId=file_map[chosen_name])
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+                fh.seek(0)
+
+                if chosen_name.endswith(".csv"):
+                    rep_df = pd.read_csv(fh)
+                    st.dataframe(rep_df, use_container_width=True, hide_index=True)
+                else:
+                    xl_rep = pd.ExcelFile(fh)
+                    sheet_sel = st.selectbox("शीट (Tab) निवडा", xl_rep.sheet_names)
+                    rep_df = pd.read_excel(xl_rep, sheet_name=sheet_sel)
+                    st.dataframe(rep_df, use_container_width=True, hide_index=True)
+
+    with tab3:
         st.subheader("सर्व Nifty 500 शेअर्सची Dhan व Zerodha MTF यादी")
         search_q = st.text_input("कंपनी किंवा सेक्टर शोधा (उदा. BANK, TATA, PHARMA)")
         view_df = df_stocks.copy()
@@ -249,4 +364,3 @@ def render_app():
 
 if __name__ == "__main__":
     render_app()
-
