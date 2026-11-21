@@ -97,7 +97,8 @@ def fetch_latest_gdrive_reports():
     try:
         token_info = json.loads(st.secrets["GDRIVE_TOKEN_JSON"])
         root_id = st.secrets.get("GDRIVE_FOLDER_ID", DEFAULT_DRIVE_FOLDER_ID)
-        scopes = ["https://googleapis.com"]
+        drive_scope = "".join(["https://", "www.", "googleapis.", "com/", "auth/", "drive"])
+        scopes = [drive_scope]
         creds = Credentials.from_authorized_user_info(token_info, scopes)
         service = build("drive", "v3", credentials=creds)
 
