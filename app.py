@@ -15,6 +15,20 @@ MARGIN_FILE = "Zerodha_Dhan Margin Calculator.xlsx"
 DEFAULT_DRIVE_FOLDER_ID = "11vyLILBunUtCb0CDWDx2yTLtYVOShatO"
 
 
+def get_gdrive_service():
+    if "GDRIVE_TOKEN_JSON" not in st.secrets:
+        return None, None, "Google Drive जोडलेले नाही (Streamlit Secrets मध्ये Token तपासा)."
+    try:
+        token_info = json.loads(st.secrets["GDRIVE_TOKEN_JSON"])
+        root_id = st.secrets.get("GDRIVE_FOLDER_ID", DEFAULT_DRIVE_FOLDER_ID)
+        drive_scope = "".join(["https://", "www.", "googleapis.", "com/", "auth/", "drive"])
+        creds = Credentials.from_authorized_user_info(token_info, [drive_scope])
+        service = build("drive", "v3", credentials=creds)
+        return service, root_id, None
+    except Exception as e:
+        return None, None, f"Drive कनेक्शन त्रुटी: {e}"
+
+
 @st.cache_data(ttl=3600)
 def load_stocks_and_margins():
     stocks = []
@@ -87,29 +101,19 @@ def get_live_cmp(symbol):
         pass
     return 0.0
 
-
 @st.cache_data(ttl=900)
 def fetch_latest_gdrive_reports():
-    """Streamlit Secrets मधून सुरक्षितपणे Google Drive वरील ताजे स्कॅन रिपोर्ट्स वाचणे"""
-    if "GDRIVE_TOKEN_JSON" not in st.secrets:
-        return None, [], "Google Drive जोडलेले नाही (खालील सूचनांनुसार Streamlit Secrets मध्ये Token टाका)."
+    service, root_id, err = get_gdrive_service()
+    if err:
+        return None, [], err
 
     try:
-        token_info = json.loads(st.secrets["GDRIVE_TOKEN_JSON"])
-        root_id = st.secrets.get("GDRIVE_FOLDER_ID", DEFAULT_DRIVE_FOLDER_ID)
-        drive_scope = "".join(["https://", "www.", "googleapis.", "com/", "auth/", "drive"])
-        scopes = [drive_scope]
-        creds = Credentials.from_authorized_user_info(token_info, scopes)
-        service = build("drive", "v3", credentials=creds)
-
-        # 01_Daily_Reports फोल्डर शोधणे
         q_daily = f"name='01_Daily_Reports' and '{root_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
         daily_res = service.files().list(q=q_daily, fields="files(id)").execute().get("files", [])
         if not daily_res:
             return None, [], "Drive वर '01_Daily_Reports' फोल्डर सापडले नाही."
-        daily_id = next(iter(daily_res))["id"]
 
-        # सर्वात ताजे तारीख फोल्डर शोधणे
+        daily_id = next(iter(daily_res)).get("id")
         q_dates = f"'{daily_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
         date_folders = service.files().list(
             q=q_dates, orderBy="createdTime desc", pageSize=5, fields="files(id, name)"
@@ -118,26 +122,59 @@ def fetch_latest_gdrive_reports():
             return None, [], "अजून कोणतेही तारीख फोल्डर तयार झालेले नाही."
 
         latest_folder = next(iter(date_folders))
+        folder_ids = [latest_folder.get("id")]
 
-        folder_ids = [latest_folder["id"]]
-
-        # आतील सब-फोल्डर्स (Full_Market_Scan, Sector_and_Breadth इ.) शोधणे
-        q_subs = f"'{latest_folder['id']}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        q_subs = f"'{latest_folder.get('id')}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
         sub_folders = service.files().list(q=q_subs, fields="files(id, name)").execute().get("files", [])
         for sf in sub_folders:
-            folder_ids.append(sf["id"])
+            folder_ids.append(sf.get("id"))
 
         report_files = []
         for fid in folder_ids:
             q_files = f"'{fid}' in parents and trashed=false and (name contains '.xlsx' or name contains '.csv')"
             items = service.files().list(q=q_files, fields="files(id, name)").execute().get("files", [])
             for it in items:
-                if "Calculator" not in it["name"]:
+                if "Calculator" not in it.get("name", ""):
                     report_files.append(it)
 
-        return latest_folder["name"], report_files, service
+        return latest_folder.get("name"), report_files, service
     except Exception as e:
-        return None, [], f"Drive कनेक्शन त्रुटी: {e}"
+        return None, [], f"Drive त्रुटी: {e}"
+
+
+@st.cache_data(ttl=600)
+def fetch_master_trade_journal():
+    service, root_id, err = get_gdrive_service()
+    if err:
+        return None, err
+
+    try:
+        q_j = f"name='04_Trade_Journal' and '{root_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        j_res = service.files().list(q=q_j, fields="files(id)").execute().get("files", [])
+        if not j_res:
+            return None, "Drive वर '04_Trade_Journal' फोल्डर सापडले नाही."
+
+        j_id = next(iter(j_res)).get("id")
+        q_f = f"name='Master_Trade_Journal.xlsx' and '{j_id}' in parents and trashed=false"
+        f_res = service.files().list(q=q_f, fields="files(id)").execute().get("files", [])
+        if not f_res:
+            return None, "अजून 'Master_Trade_Journal.xlsx' तयार झालेली नाही. आधी Tradebooks_Drop_Here मध्ये फाईल टाकून Weekly Sync रन करा."
+
+        file_id = next(iter(f_res)).get("id")
+        request = service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        fh.seek(0)
+
+        xl = pd.ExcelFile(fh)
+        sheets_data = {s: pd.read_excel(xl, sheet_name=s) for s in xl.sheet_names}
+        return sheets_data, None
+    except Exception as e:
+        return None, f"जर्नल वाचताना त्रुटी: {e}"
+
 
 def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct, margin_pct):
     m_dec = margin_pct / 100.0
@@ -192,7 +229,6 @@ def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct,
     net_loss = round(((sl - entry) * safe_qty) - total_charges, 2)
     roi = round((net_profit / margin_used) * 100, 2) if margin_used > 0 else 0.0
 
-    # ५०% अर्धा नफा बुकिंग गणना
     half_qty = safe_qty // 2
     rem_qty = safe_qty - half_qty
     half_cost = round(total_charges * 0.5, 2)
@@ -213,17 +249,18 @@ def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct,
 
 def render_app():
     st.title("📈 Nifty 500 MTF & MIS Pro")
-    st.caption("Dhan आणि Zerodha पोझिशन सायझिंग, ५०% प्रॉफिट बुकिंग, Trailing SL व लाइव्ह ब्रेकआऊट स्कॅनर")
+    st.caption("Dhan, Zerodha, FYERS, Groww — पोझिशन सायझिंग, ब्रेकआऊट रिपोर्ट्स आणि ट्रेड जर्नल")
 
     df_stocks = load_stocks_and_margins()
     if df_stocks.empty:
         st.error("Nifty_500_Stocks.xlsx सापडली नाही! कृपया GitHub रेपॉझिटरी तपासा.")
         return
 
-    tab1, tab2, tab3 = st.tabs([
-        "🧮 MTF / MIS कॅल्क्युलेटर",
-        "🚀 आजचे ब्रेकआऊट रिपोर्ट्स",
-        "📊 ५०० शेअर्स मार्जिन यादी"
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🧮 कॅल्क्युलेटर",
+        "🚀 ब्रेकआऊट रिपोर्ट्स",
+        "📊 ५०० शेअर्स मार्जिन",
+        "🏆 ट्रेड जर्नल (P&L)"
     ])
 
     with tab1:
@@ -235,7 +272,7 @@ def render_app():
         default_idx = symbols.index("RELIANCE") if "RELIANCE" in symbols else 0
         selected_sym = st.selectbox("🔍 Nifty 500 शेअर निवडा (टाईप करून शोधा)", symbols, index=default_idx)
 
-        stock_row = df_stocks[df_stocks["Symbol"] == selected_sym].iloc[0]
+        stock_row = df_stocks[df_stocks["Symbol"] == selected_sym].iloc.to_dict() if False else df_stocks[df_stocks["Symbol"] == selected_sym].to_dict("records").pop(0)
         live_cmp = get_live_cmp(selected_sym)
 
         st.info(f"**{stock_row['Company']}** ({stock_row['Industry']}) | लाइव्ह भाव: **₹{live_cmp:,.2f}**")
@@ -277,16 +314,16 @@ def render_app():
         if product == "MTF Swing":
             st.warning(f"🚨 **MTF Margin Call धोक्याची किंमत:** ₹{active['danger_price']:,.2f} (फंडिंग रक्कम: ₹{active['funded_amt']:,.0f})")
 
-        st.subheader("💰 ५०% अर्धा नफा बुकिंग प्लॅनर (Partial Profit Booking)")
+        st.subheader("💰 ५०% अर्धा नफा बुकिंग प्लॅनर")
         partial_df = pd.DataFrame({
-            "टप्पा (Stage)": ["टप्पा १: Target 1 (50% Book)", "टप्पा २: Target 2 (उरलेले 50%)", "एकूण एकत्रित निव्वळ नफा (Total)"],
+            "टप्पा (Stage)": ["टप्पा १: Target 1 (50% Book)", "टप्पा २: Target 2 (उरलेले 50%)", "एकूण एकत्रित निव्वळ नफा"],
             "विक्री किंमत (₹)": [f"₹{t1:,.2f}", f"₹{t2:,.2f}", "-"],
-            "शेअर संख्या (Qty)": [f"{active['half_qty']} शेअर्स", f"{active['rem_qty']} शेअर्स", f"{active['safe_qty']} शेअर्स"],
-            "निव्वळ नफा (Net Profit ₹)": [f"₹{active['p1_profit']:,.2f}", f"₹{active['p2_profit']:,.2f}", f"₹{active['partial_total']:,.2f}"]
+            "शेअर्स (Qty)": [f"{active['half_qty']}", f"{active['rem_qty']}", f"{active['safe_qty']}"],
+            "निव्वळ नफा (₹)": [f"₹{active['p1_profit']:,.2f}", f"₹{active['p2_profit']:,.2f}", f"₹{active['partial_total']:,.2f}"]
         })
         st.dataframe(partial_df, use_container_width=True, hide_index=True)
 
-        st.subheader("⚔️ Dhan विरुद्ध Zerodha थेट तुलना (Safe Qty)")
+        st.subheader("⚔️ Dhan विरुद्ध Zerodha थेट तुलना")
         comp_df = pd.DataFrame({
             "तपशील": ["मार्जिन %", "ब्रोकरेज (₹)", "MTF व्याज (₹)", "सरकारी कर व DP (₹)", "एकूण खर्च (₹)", "Target 2 निव्वळ नफा (₹)"],
             "Dhan": [f"{dhan_m}%", res_dhan["brokerage"], res_dhan["interest"], res_dhan["taxes"], res_dhan["total_charges"], res_dhan["net_profit"]],
@@ -304,7 +341,7 @@ def render_app():
         risk_pts = abs(entry - sl)
         tsl_df = pd.DataFrame({
             "टप्पा": ["1R (1:1)", "1.5R (1:1.5)", "2R (1:2)", "3R (1:3)"],
-            "शेअर किंमत (Trigger ₹)": [round(entry + risk_pts, 2), round(entry + 1.5 * risk_pts, 2), round(entry + 2 * risk_pts, 2), round(entry + 3 * risk_pts, 2)],
+            "Trigger किंमत (₹)": [round(entry + risk_pts, 2), round(entry + 1.5 * risk_pts, 2), round(entry + 2 * risk_pts, 2), round(entry + 3 * risk_pts, 2)],
             "नवीन Trailing SL (₹)": [active["breakeven"], round(entry + 0.5 * risk_pts, 2), round(entry + risk_pts, 2), round(entry + 2 * risk_pts, 2)],
         })
         st.dataframe(tsl_df, use_container_width=True, hide_index=True)
@@ -315,21 +352,11 @@ def render_app():
 
         if not folder_date:
             st.info(service_or_msg)
-            st.markdown("""
-            **Google Drive जोडण्यासाठी (फक्त १ मिनिटाचे काम):**
-            1. तुमची रेपॉझिटरी **Public** असल्यामुळे कधीही `token.json` फाईल GitHub वर टाकू नका.
-            2. त्याऐवजी **Streamlit Cloud -> तुमच्या App चे `Settings` -> `Secrets`** उघडा.
-            3. तेथे तुमच्या `C:\\NSE-Stock-Automation\\token.json` मधील मजकूर खालीलप्रमाणे पेस्ट करा:
-            ```toml
-            GDRIVE_FOLDER_ID = "11vyLILBunUtCb0CDWDx2yTLtYVOShatO"
-            GDRIVE_TOKEN_JSON = '''येथे_तुमचा_token.json_मजकूर_पेस्ट_करा'''
-            ```
-            """)
         elif not rep_files:
-            st.warning(f"📅 **{folder_date}** फोल्डरमध्ये कोणताही Excel/CSV रिपोर्ट सापडला नाही.")
+            st.warning(f"📅 **{folder_date}** फोल्डरमध्ये कोणताही रिपोर्ट सापडला नाही.")
         else:
             st.success(f"📅 ताजे रिपोर्ट्स लोड झाले आहेत: **{folder_date}**")
-            file_map = {f["name"]: f["id"] for f in rep_files}
+            file_map = {f.get("name"): f.get("id") for f in rep_files}
             chosen_name = st.selectbox("रिपोर्ट निवडा", list(file_map.keys()))
 
             if chosen_name:
@@ -342,13 +369,11 @@ def render_app():
                 fh.seek(0)
 
                 if chosen_name.endswith(".csv"):
-                    rep_df = pd.read_csv(fh)
-                    st.dataframe(rep_df, use_container_width=True, hide_index=True)
+                    st.dataframe(pd.read_csv(fh), use_container_width=True, hide_index=True)
                 else:
                     xl_rep = pd.ExcelFile(fh)
                     sheet_sel = st.selectbox("शीट (Tab) निवडा", xl_rep.sheet_names)
-                    rep_df = pd.read_excel(xl_rep, sheet_name=sheet_sel)
-                    st.dataframe(rep_df, use_container_width=True, hide_index=True)
+                    st.dataframe(pd.read_excel(xl_rep, sheet_name=sheet_sel), use_container_width=True, hide_index=True)
 
     with tab3:
         st.subheader("सर्व Nifty 500 शेअर्सची Dhan व Zerodha MTF यादी")
@@ -362,6 +387,46 @@ def render_app():
             ]
         st.dataframe(view_df, use_container_width=True, hide_index=True)
 
+    with tab4:
+        st.subheader("🏆 एकत्रित ट्रेड जर्नल व खातेधारक कामगिरी (All Brokers)")
+        if st.button("🔄 ताजा डेटा रिफ्रेश करा"):
+            st.cache_data.clear()
 
-if __name__ == "__main__":
-    render_app()
+        sheets_data, j_err = fetch_master_trade_journal()
+        if j_err:
+            st.info(j_err)
+        elif sheets_data and "All_Trades_Journal" in sheets_data:
+            all_df = sheets_data["All_Trades_Journal"]
+
+            holders = ["सर्व (All)"] + sorted(all_df["ACCOUNT_HOLDER"].dropna().unique().tolist())
+            sel_holder = st.selectbox("👤 खातेधारक निवडा (Account Holder Filter)", holders)
+
+            filtered_df = all_df if sel_holder == "सर्व (All)" else all_df[all_df["ACCOUNT_HOLDER"] == sel_holder]
+            closed_df = filtered_df[filtered_df["STATUS"].isin(["WIN", "LOSS"])]
+            open_cnt = len(filtered_df[filtered_df["STATUS"] == "OPEN"])
+
+            tot_trades = len(closed_df)
+            wins = len(closed_df[closed_df["STATUS"] == "WIN"])
+            win_rate = round((wins / tot_trades) * 100, 1) if tot_trades > 0 else 0.0
+            net_pnl = round(closed_df["NET_PNL"].sum(), 2) if tot_trades > 0 else 0.0
+            tot_charges = round(closed_df["CHARGES_TAX"].sum(), 2) if tot_trades > 0 else 0.0
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("निव्वळ नफा (Net P&L)", f"₹{net_pnl:,.2f}")
+            k2.metric("Win Rate %", f"{win_rate}%", f"{wins}/{tot_trades} Wins")
+            k3.metric("कर व ब्रोकरेज", f"₹{tot_charges:,.2f}")
+            k4.metric("चालू ट्रेड्स (OPEN)", f"{open_cnt}")
+
+            if sel_holder == "सर्व (All)" and "Account_Holder_Summary" in sheets_data:
+                st.subheader("👥 खातेधारकानुसार सारांश (Account Holder Summary)")
+                st.dataframe(sheets_data["Account_Holder_Summary"], use_container_width=True, hide_index=True)
+
+            if "Broker_Summary" in sheets_data and sel_holder == "सर्व (All)":
+                st.subheader("🏦 ब्रोकरनुसार कामगिरी (Zerodha, FYERS, Groww, Dhan)")
+                st.dataframe(sheets_data["Broker_Summary"], use_container_width=True, hide_index=True)
+
+            st.subheader("📋 सर्व ट्रेड्सची यादी (Detailed Trades)")
+
+st.dataframe(filtered_df, use_container_width=True, hide_index=True)
+if name == "main":
+render_app()
