@@ -796,16 +796,22 @@ def render_chart_scanner_tab(tab_obj, mode, tab_heading):
             st.error(c_err)
             return
 
-        # Excel मधील सिम्बॉल्स आणि चार्ट्सचे सिम्बॉल्स एकत्र करणे
+        # Excel मधील वैध सिम्बॉल्स काढणे (TOTAL / 25 STOCKS सारख्या ओळी वगळून)
         excel_syms = []
         sym_col = None
         for col in df_excel.columns:
             if str(col).strip().upper() in ("SYMBOL", "STOCK", "TICKER"):
                 sym_col = col
-                excel_syms = [str(s).strip().upper() for s in df_excel[col].dropna().unique()]
+                for s in df_excel[col].dropna().unique():
+                    s_clean = str(s).strip().upper()
+                    if s_clean and "STOCK" not in s_clean and "TOTAL" not in s_clean and "PORTFOLIO" not in s_clean:
+                        excel_syms.append(s_clean)
                 break
 
-        all_syms = sorted(list(set(list(chart_map.keys()) + excel_syms)))
+        # ज्या शेअर्सचे PNG चार्ट्स उपलब्ध आहेत ते सर्वात वरती ठेवणे
+        chart_syms = sorted(list(chart_map.keys()))
+        only_data_syms = sorted([s for s in set(excel_syms) if s not in chart_map])
+        all_syms = chart_syms + only_data_syms
 
         if not all_syms and df_excel.empty:
             st.warning(f"📅 **{sel_date}** या तारखेसाठी चार्ट्स किंवा रिपोर्ट उपलब्ध नाहीत.")
@@ -814,7 +820,7 @@ def render_chart_scanner_tab(tab_obj, mode, tab_heading):
         if view_mode.startswith("🔍"):
             if all_syms:
                 sel_sym = st.selectbox(
-                    f"📈 शेअर निवडा ({len(chart_map)} चार्ट्स उपलब्ध)",
+                    f"📈 शेअर निवडा ({len(chart_syms)} चार्ट्स उपलब्ध | एकूण {len(all_syms)} शेअर्स)",
                     all_syms,
                     key=f"sym_{mode}"
                 )
@@ -837,7 +843,7 @@ def render_chart_scanner_tab(tab_obj, mode, tab_heading):
                     if img_bytes:
                         st.image(img_bytes, caption=f"{sel_sym} — {chart_map[sel_sym]['name']}", use_container_width=True)
                 else:
-                    st.info(f"ℹ️ **{sel_sym}** साठी PNG चार्ट इमेज उपलब्ध नाही, फक्त वरील डेटा उपलब्ध आहे.")
+                    st.info(f"ℹ️ **{sel_sym}** साठी PNG चार्ट इमेज उपलब्ध नाही (वरचे पहिले {len(chart_syms)} शेअर्स निवडा).")
         else:
             if not chart_map:
                 st.info("या तारखेसाठी PNG चार्ट्स सापडले नाहीत.")
@@ -852,7 +858,7 @@ def render_chart_scanner_tab(tab_obj, mode, tab_heading):
 
         # तळाशी पूर्ण Excel तक्ता
         if not df_excel.empty:
-            with st.expander(f"📊 संपूर्ण Excel डेटा तक्ता पहा ({len(df_excel)} शेअर्स)", expanded=False):
+            with st.expander(f"📊 संपूर्ण Excel डेटा तक्ता पहा ({len(df_excel)} ओळी)", expanded=False):
                 st.dataframe(
                     df_excel,
                     use_container_width=True,
@@ -860,6 +866,7 @@ def render_chart_scanner_tab(tab_obj, mode, tab_heading):
                     height=500,
                     column_config=get_smart_col_config(df_excel)
                 )
+
 
 def render_app():
     st.title("📈 Nifty 500 MTF & MIS Pro")
