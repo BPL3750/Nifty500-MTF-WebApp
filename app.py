@@ -621,8 +621,11 @@ def render_tab4_journal(tab4):
                 top_losers = sym_df[sym_df["Net P&L (₹)"] < 0].sort_values(by="Net P&L (₹)", ascending=True).head(5)
 
                 stock_col_cfg = {
-                    "Win Rate %": st.column_config.NumberColumn(format="%.1f%%"),
-                    "Net P&L (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                    "Symbol": st.column_config.TextColumn("Symbol", width="small"),
+                    "Company": st.column_config.TextColumn("Company Name", width="large"),
+                    "Trades": st.column_config.NumberColumn("Trades", width="small"),
+                    "Win Rate %": st.column_config.NumberColumn("Win %", format="%.1f%%", width="small"),
+                    "Net P&L (₹)": st.column_config.NumberColumn("Net P&L (₹)", format="₹%.2f", width="medium"),
                 }
 
                 st.subheader("🏅 सर्वाधिक नफा व तोटा देणारे टॉप ५ शेअर्स")
@@ -630,16 +633,19 @@ def render_tab4_journal(tab4):
                 with t_win_col:
                     st.markdown("**🟢 टॉप ५ नफा देणारे शेअर्स (Top 5 Winners)**")
                     if not top_winners.empty:
-                        st.dataframe(top_winners, use_container_width=True, hide_index=True, column_config=stock_col_cfg)
+                        win_h = (len(top_winners) + 1) * 35 + 5
+                        st.dataframe(top_winners, use_container_width=True, hide_index=True, height=win_h, column_config=stock_col_cfg)
                     else:
                         st.info("नफा झालेले शेअर्स नाहीत.")
 
                 with t_loss_col:
                     st.markdown("**🔴 टॉप ५ तोटा देणारे शेअर्स (Top 5 Losers)**")
                     if not top_losers.empty:
-                        st.dataframe(top_losers, use_container_width=True, hide_index=True, column_config=stock_col_cfg)
+                        loss_h = (len(top_losers) + 1) * 35 + 5
+                        st.dataframe(top_losers, use_container_width=True, hide_index=True, height=loss_h, column_config=stock_col_cfg)
                     else:
                         st.info("तोटा झालेले शेअर्स नाहीत.")
+
 
                 st.subheader("👥 खातेधारकानुसार सारांश (TOTAL सह)")
                 st.dataframe(
