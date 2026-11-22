@@ -444,8 +444,23 @@ def add_total_row(df_in, label_col):
 def render_tab4_journal(tab4):
     with tab4:
         st.subheader("🏆 एकत्रित ट्रेड जर्नल व इंटरॲक्टिव्ह डॅशबोर्ड")
-        if st.button("🔄 ताजा डेटा रिफ्रेश करा"):
-            st.cache_data.clear()
+
+        # खाजगी P&L डेटा सुरक्षित ठेवण्यासाठी पासवर्ड लॉक
+        app_pin = st.secrets.get("JOURNAL_PASSWORD", "1234")
+        if "journal_unlocked" not in st.session_state:
+            st.session_state["journal_unlocked"] = False
+
+        if not st.session_state["journal_unlocked"]:
+            st.info("🔒 हा विभाग खाजगी आहे. सर्व खातेधारकांचा नफा-तोटा पाहण्यासाठी पासवर्ड/PIN टाका.")
+            entered_pin = st.text_input("पासवर्ड / PIN टाका", type="password", key="j_pin_input")
+            if st.button("🔓 अनलॉक करा (Unlock)"):
+                if entered_pin == str(app_pin):
+                    st.session_state["journal_unlocked"] = True
+                    st.rerun()
+                else:
+                    st.error("❌ चुकीचा पासवर्ड! कृपया पुन्हा प्रयत्न करा.")
+            return
+
 
         sheets_data, j_err = fetch_master_trade_journal()
         if j_err:
