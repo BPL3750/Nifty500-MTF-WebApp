@@ -1,4 +1,4 @@
-"भाग १ (Part 1 of 10): सेटअप, Google Drive आणि Live CMP"
+
 import os
 import io
 import json
@@ -15,7 +15,6 @@ st.set_page_config(page_title="Nifty 500 MTF & MIS Pro", page_icon="📈", layou
 NIFTY_FILE = "Nifty_500_Stocks.xlsx"
 MARGIN_FILE = "Zerodha_Dhan Margin Calculator.xlsx"
 DEFAULT_DRIVE_FOLDER_ID = "11vyLILBunUtCb0CDWDx2yTLtYVOShatO"
-
 
 def get_gdrive_service():
     if "GDRIVE_TOKEN_JSON" not in st.secrets:
@@ -48,8 +47,6 @@ def fetch_all_live_prices(symbols_tuple):
     except Exception:
         pass
     return prices
-
-"भाग २ (Part 2 of 10): Nifty 500 शेअर्स आणि Dhan/Zerodha मार्जिन लोड करणे"
 
 @st.cache_data(ttl=3600)
 def load_stocks_and_margins():
@@ -116,8 +113,6 @@ def load_stocks_and_margins():
         df_res["Live_CMP"] = df_res["Symbol"].map(live_map).fillna(0.0)
     return df_res
 
-"भाग ३ (Part 3 of 10): Google Drive रिपोर्ट्स आणि Master Trade Journal वाचणे"
-
 @st.cache_data(ttl=900)
 def fetch_latest_gdrive_reports():
     service, root_id, err = get_gdrive_service()
@@ -158,7 +153,6 @@ def fetch_latest_gdrive_reports():
     except Exception as e:
         return None, [], f"Drive त्रुटी: {e}"
 
-
 @st.cache_data(ttl=600)
 def fetch_master_trade_journal():
     service, root_id, err = get_gdrive_service()
@@ -191,8 +185,6 @@ def fetch_master_trade_journal():
         return sheets_data, None
     except Exception as e:
         return None, f"जर्नल वाचताना त्रुटी: {e}"
-
-"भाग ४ (Part 4 of 10): MTF / MIS कॅल्क्युलेटर गणित"
 
 def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct, margin_pct):
     m_dec = margin_pct / 100.0
@@ -265,7 +257,6 @@ def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct,
         "p1_profit": p1_profit, "p2_profit": p2_profit, "partial_total": partial_total
     }
 
-"भाग ५ (Part 5 of 10): टॅब १ — कॅल्क्युलेटर इंटरफेस"
 def render_tab1_calculator(df_stocks):
     col_b, col_p = st.columns(2)
     broker = col_b.selectbox("ब्रोकर निवडा", ["Dhan", "Zerodha"])
@@ -349,7 +340,7 @@ def render_tab1_calculator(df_stocks):
     })
     st.dataframe(tsl_df, use_container_width=True, hide_index=True)
 
-"भाग ६ (Part 6 of 10): टॅब २ (ब्रेकआऊट रिपोर्ट्स) आणि टॅब ५ (५०० शेअर्स Live CMP)"
+
 def get_smart_col_config(df):
     cfg = {}
     price_keywords = (
@@ -430,7 +421,7 @@ def render_tab2_and_tab3(tab2, tab3, df_stocks):
             }
         )
 
-"भाग ७ (Part 7 of 10): चार्ट्स आणि Excel स्कॅनर डेटा आणणारे मदतगार फंक्शन्स"
+
 @st.cache_data(ttl=900)
 def get_daily_date_folders():
     service, root_id, err = get_gdrive_service()
@@ -523,7 +514,7 @@ def download_chart_bytes(file_id):
         _, done = downloader.next_chunk()
     return fh.getvalue()
 
-"भाग ८ (Part 8 of 10): टॅब ३ आणि ४ — ब्रेकआऊट चार्ट्स व ट्रेंडलाईन चार्ट्स इंटरफेस"
+
 def render_chart_scanner_tab(tab_obj, mode, tab_heading):
     with tab_obj:
         st.subheader(tab_heading)
@@ -617,8 +608,6 @@ def render_chart_scanner_tab(tab_obj, mode, tab_heading):
                     column_config=get_smart_col_config(df_excel)
                 )
 
-"भाग ९ (Part 9 of 10): ट्रेड जर्नलचे ग्राफ्स आणि सारांश तक्ते तयार करणारे फंक्शन्स"
-
 def add_total_row(df_in, label_col):
     df_clean = df_in[df_in[label_col].astype(str).str.upper() != "TOTAL"].copy()
     tot_c = int(df_clean["Closed Trades"].sum())
@@ -636,7 +625,6 @@ def add_total_row(df_in, label_col):
         "Net P&L (₹)": round(df_clean["Net P&L (₹)"].sum(), 2),
     }])
     return pd.concat([df_clean, tot_row], ignore_index=True)
-
 
 def build_dynamic_summary(df_sub, group_col, display_label):
     rows = []
@@ -656,7 +644,6 @@ def build_dynamic_summary(df_sub, group_col, display_label):
             "Net P&L (₹)": round(grp["NET_PNL"].sum(), 2),
         })
     return add_total_row(pd.DataFrame(rows), display_label)
-
 
 def render_journal_charts(closed_df, wins, losses):
     closed_df = closed_df.copy()
@@ -728,26 +715,29 @@ def render_journal_charts(closed_df, wins, losses):
         fig_brk.update_layout(height=350, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
         st.plotly_chart(fig_brk, use_container_width=True)
 
-"भाग १० (Part 10 of 10): पासवर्ड-सुरक्षित ट्रेड जर्नल आणि मुख्य ॲप"
+
 def render_tab4_journal(tab4):
     with tab4:
         j_col1, j_col2 = st.columns((5, 1))
         j_col1.subheader("🏆 एकत्रित ट्रेड जर्नल व इंटरॲक्टिव्ह डॅशबोर्ड")
 
-        app_pin = st.secrets.get("JOURNAL_PASSWORD", "1234")
+        app_pin = str(st.secrets.get("JOURNAL_PASSWORD", "1234")).strip()
         if "journal_unlocked" not in st.session_state:
             st.session_state["journal_unlocked"] = False
 
         if not st.session_state["journal_unlocked"]:
             st.info("🔒 हा विभाग खाजगी आहे. सर्व खातेधारकांचा नफा-तोटा पाहण्यासाठी पासवर्ड/PIN टाका.")
-            entered_pin = st.text_input("पासवर्ड / PIN टाका", type="password", key="j_pin_input")
-            if st.button("🔓 अनलॉक करा (Unlock)"):
-                if entered_pin == str(app_pin):
-                    st.session_state["journal_unlocked"] = True
-                    st.rerun()
-                else:
-                    st.error("❌ चुकीचा पासवर्ड! कृपया पुन्हा प्रयत्न करा.")
+            with st.form("journal_login_form"):
+                entered_pin = st.text_input("पासवर्ड / PIN टाका", type="password")
+                submitted = st.form_submit_button("🔓 अनलॉक करा (Unlock)")
+                if submitted:
+                    if entered_pin.strip() == app_pin:
+                        st.session_state["journal_unlocked"] = True
+                        st.rerun()
+                    else:
+                        st.error("❌ चुकीचा पासवर्ड! Streamlit Secrets मधील JOURNAL_PASSWORD तपासा.")
             return
+
 
         if j_col2.button("🔒 लॉक करा", key="lock_journal_btn", use_container_width=True):
             st.session_state["journal_unlocked"] = False
@@ -864,7 +854,6 @@ def render_tab4_journal(tab4):
                     "RETURN_%": st.column_config.NumberColumn("Return %", format="%.2f%%"),
                 }
             )
-
 
 def render_app():
     top_c1, top_c2 = st.columns((5, 1))
