@@ -786,7 +786,6 @@ def render_chart_scanner_tab(tab_obj, mode, tab_heading):
             st.warning("अजून कोणतेही तारीख फोल्डर सापडले नाही.")
             return
 
-
         folder_map = {f.get("name"): f.get("id") for f in folders}
         c_date, c_view = st.columns([1, 2])
         sel_date = c_date.selectbox("📅 तारीख निवडा (Date)", list(folder_map.keys()), key=f"dt_{mode}")
@@ -860,7 +859,8 @@ def render_chart_scanner_tab(tab_obj, mode, tab_heading):
                     img_bytes = download_chart_bytes(info["id"])
                     if img_bytes:
                         with grid_cols[idx % 2]:
-                            st.image(img_bytes, caption=f"{sym} ({info['name']})", use_container_width=True)
+                            with st.container(border=True):
+                                st.image(img_bytes, caption=f"{sym} ({info['name']})", use_container_width=True)
 
         # तळाशी पूर्ण Excel तक्ता
         if not df_excel.empty:
