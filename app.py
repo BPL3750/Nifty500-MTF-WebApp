@@ -114,44 +114,95 @@ def load_stocks_and_margins():
     return df_res
 
 @st.cache_data(ttl=900)
-def fetch_latest_gdrive_reports():
+
+import re
+from datetime import datetime
+
+
+@st.cache_data(ttl=900)
+def get_all_report_date_folders():
     service, root_id, err = get_gdrive_service()
     if err:
-        return None, [], err
-
+        return [], err
     try:
         q_daily = f"name='01_Daily_Reports' and '{root_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
         daily_res = service.files().list(q=q_daily, fields="files(id)").execute().get("files", [])
         if not daily_res:
-            return None, [], "Drive वर '01_Daily_Reports' फोल्डर सापडले नाही."
+            return [], "Drive वर '01_Daily_Reports' फोल्डर सापडले नाही."
 
         daily_id = next(iter(daily_res)).get("id")
         q_dates = f"'{daily_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
         date_folders = service.files().list(
-            q=q_dates, orderBy="createdTime desc", pageSize=5, fields="files(id, name)"
+            q=q_dates, orderBy="createdTime desc", pageSize=60, fields="files(id, name)"
         ).execute().get("files", [])
-        if not date_folders:
-            return None, [], "अजून कोणतेही तारीख फोल्डर तयार झालेले नाही."
 
-        latest_folder = next(iter(date_folders))
-        folder_ids = [latest_folder.get("id")]
+        parsed_list = []
+        for f in date_folders:
+            fname = f.get("name", "").strip()
+            try:
+                dt = datetime.strptime(fname, "%d-%b-%Y")
+                parsed_list.append({
+                    "id": f.get("id"),
+                    "name": fname,
+                    "dt": dt,
+                    "month": dt.strftime("%b-%Y"),
+                    "day": dt.strftime("%A"),
+                })
+            except ValueError:
+                continue
 
-        q_subs = f"'{latest_folder.get('id')}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        parsed_list.sort(key=lambda x: x["dt"], reverse=True)
+        return parsed_list, None
+    except Exception as e:
+        return [], f"Drive फोल्डर वाचताना त्रुटी: {e}"
+
+
+@st.cache_data(ttl=900)
+def fetch_clean_reports_for_date(date_folder_id):
+    """एकाच दिवसातील डुप्लिकेट रिपोर्ट्स वगळून प्रत्येक रिपोर्टचा फक्त ताजा (Latest) व्हर्जन आणणे"""
+    service, _, err = get_gdrive_service()
+    if err:
+        return [], None, err
+
+    try:
+        folder_ids = [date_folder_id]
+        q_subs = f"'{date_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
         sub_folders = service.files().list(q=q_subs, fields="files(id, name)").execute().get("files", [])
         for sf in sub_folders:
             folder_ids.append(sf.get("id"))
 
-        report_files = []
+        raw_files = []
         for fid in folder_ids:
             q_files = f"'{fid}' in parents and trashed=false and (name contains '.xlsx' or name contains '.csv')"
-            items = service.files().list(q=q_files, fields="files(id, name)").execute().get("files", [])
+            items = service.files().list(
+                q=q_files, orderBy="createdTime desc", pageSize=50, fields="files(id, name, createdTime)"
+            ).execute().get("files", [])
             for it in items:
                 if "Calculator" not in it.get("name", ""):
-                    report_files.append(it)
+                    raw_files.append(it)
 
-        return latest_folder.get("name"), report_files, service
+        raw_files.sort(key=lambda x: x.get("createdTime", ""), reverse=True)
+
+        unique_reports = {}
+        for it in raw_files:
+            fname = it.get("name", "")
+            # फाईलच्या नावातील तारीख व वेळ काढून मूळ रिपोर्टचे नाव मिळवणे (उदा. Breakout_Scanner.xlsx)
+            clean_base = re.sub(r"_\d{1,2}-[A-Za-z]{3}-\d{2,4}(_\d{4})?", "", fname)
+            time_match = re.search(r"_(\d{2})(\d{2})\.(xlsx|csv)$", fname, re.IGNORECASE)
+            time_tag = f" (Latest: {time_match.group(1)}:{time_match.group(2)})" if time_match else ""
+            display_label = f"{clean_base}{time_tag}"
+
+            if clean_base not in unique_reports:
+                unique_reports[clean_base] = {
+                    "id": it.get("id"),
+                    "name": fname,
+                    "label": display_label
+                }
+
+        return list(unique_reports.values()), service, None
     except Exception as e:
-        return None, [], f"Drive त्रुटी: {e}"
+        return [], None, f"रिपोर्ट्स वाचताना त्रुटी: {e}"
+
 
 @st.cache_data(ttl=600)
 def fetch_master_trade_journal():
@@ -362,41 +413,65 @@ def get_smart_col_config(df):
 
 def render_tab2_and_tab3(tab2, tab3, df_stocks):
     with tab2:
-        st.subheader("🚀 Google Drive वरील आजचे ब्रेकआऊट आणि सेक्टर रिपोर्ट्स")
-        folder_date, rep_files, service_or_msg = fetch_latest_gdrive_reports()
+        st.subheader("🚀 Google Drive वरील ब्रेकआऊट आणि सेक्टर रिपोर्ट्स")
+        date_items, f_err = get_all_report_date_folders()
 
-        if not folder_date:
-            st.info(service_or_msg)
-        elif not rep_files:
-            st.warning(f"📅 **{folder_date}** फोल्डरमध्ये कोणताही रिपोर्ट सापडला नाही.")
+        if f_err:
+            st.info(f_err)
+        elif not date_items:
+            st.warning("अजून कोणतेही तारीख फोल्डर तयार झालेले नाही.")
         else:
-            st.success(f"📅 ताजे रिपोर्ट्स लोड झाले आहेत: **{folder_date}**")
-            file_map = {f.get("name"): f.get("id") for f in rep_files}
-            chosen_name = st.selectbox("रिपोर्ट निवडा", list(file_map.keys()))
+            # १. महिना (Month), वार (Day) आणि तारीख (Date) असे ३ स्वतंत्र ड्रॉपडाउन
+            months = list(dict.fromkeys([d["month"] for d in date_items]))
+            c_m, c_day, c_dt = st.columns(3)
 
-            if chosen_name:
-                request = service_or_msg.files().get_media(fileId=file_map[chosen_name])
-                fh = io.BytesIO()
-                downloader = MediaIoBaseDownload(fh, request)
-                done = False
-                while not done:
-                    _, done = downloader.next_chunk()
-                fh.seek(0)
+            sel_month = c_m.selectbox("📅 महिना निवडा (Month)", months, key="rep_month")
+            month_filtered = [d for d in date_items if d["month"] == sel_month]
 
-                if chosen_name.endswith(".csv"):
-                    rep_df = pd.read_csv(fh)
-                else:
-                    xl_rep = pd.ExcelFile(fh)
-                    sheet_sel = st.selectbox("शीट (Tab) निवडा", xl_rep.sheet_names)
-                    rep_df = pd.read_excel(xl_rep, sheet_name=sheet_sel)
+            days_in_month = ["सर्व वार (All Days)"] + list(dict.fromkeys([d["day"] for d in month_filtered]))
+            sel_day = c_day.selectbox("🗓️ वार निवडा (Day)", days_in_month, key="rep_day")
 
-                st.dataframe(
-                    rep_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=600,
-                    column_config=get_smart_col_config(rep_df)
-                )
+            final_dates = month_filtered if sel_day == "सर्व वार (All Days)" else [d for d in month_filtered if d["day"] == sel_day]
+            date_map = {f"{d['name']} ({d['day']})": d["id"] for d in final_dates}
+
+            sel_date_label = c_dt.selectbox("📆 तारीख निवडा (Date)", list(date_map.keys()), key="rep_date")
+            selected_folder_id = date_map[sel_date_label]
+
+            # २. निवडलेल्या तारखेचे स्वच्छ (Non-duplicate) रिपोर्ट्स आणणे
+            clean_reps, service_obj, r_err = fetch_clean_reports_for_date(selected_folder_id)
+            if r_err:
+                st.error(r_err)
+            elif not clean_reps:
+                st.warning(f"📅 **{sel_date_label}** या दिवशी कोणताही रिपोर्ट सापडला नाही.")
+            else:
+                st.success(f"📅 लोड झालेली तारीख: **{sel_date_label}** ({len(clean_reps)} युनिक रिपोर्ट्स)")
+                rep_map = {r["label"]: r for r in clean_reps}
+                chosen_label = st.selectbox("📑 रिपोर्ट निवडा (फक्त ताजा व्हर्जन)", list(rep_map.keys()), key="rep_file")
+
+                if chosen_label:
+                    chosen_rep = rep_map[chosen_label]
+                    request = service_obj.files().get_media(fileId=chosen_rep["id"])
+                    fh = io.BytesIO()
+                    downloader = MediaIoBaseDownload(fh, request)
+                    done = False
+                    while not done:
+                        _, done = downloader.next_chunk()
+                    fh.seek(0)
+
+                    if chosen_rep["name"].lower().endswith(".csv"):
+                        rep_df = pd.read_csv(fh)
+                    else:
+                        xl_rep = pd.ExcelFile(fh)
+                        sheet_sel = st.selectbox("शीट (Tab) निवडा", xl_rep.sheet_names, key="rep_sheet")
+                        rep_df = pd.read_excel(xl_rep, sheet_name=sheet_sel)
+
+                    st.dataframe(
+                        rep_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=600,
+                        column_config=get_smart_col_config(rep_df)
+                    )
 
     with tab3:
         st.subheader(f"📊 सर्व Nifty 500 शेअर्सची Live CMP आणि मार्जिन यादी ({len(df_stocks)} शेअर्स)")
