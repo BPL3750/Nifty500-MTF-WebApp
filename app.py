@@ -345,14 +345,27 @@ def render_tab1_calculator(df_stocks):
     st.subheader(f"🎯 {broker} ({product}) निकाल")
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("Safe Qty (२% रिस्क)", f"{active['safe_qty']} शेअर्स", f"Max Qty: {active['max_qty']}")
-    m2.metric("लीव्हरेज / मार्जिन", f"{active['leverage']}x", f"{dhan_m if broker=='Dhan' else zero_m}%")
-    m3.metric("तुमचे वापरलेले भांडवल", f"₹{active['margin_used']:,.2f}", f"खरेदी: ₹{active['trade_val']:,.2f}")
+    with m1:
+        with st.container(border=True):
+            st.metric("Safe Qty (२% रिस्क)", f"{active['safe_qty']} शेअर्स", f"Max Qty: {active['max_qty']}")
+    with m2:
+        with st.container(border=True):
+            st.metric("लीव्हरेज / मार्जिन", f"{active['leverage']}x", f"{dhan_m if broker=='Dhan' else zero_m}%")
+    with m3:
+        with st.container(border=True):
+            st.metric("तुमचे वापरलेले भांडवल", f"₹{active['margin_used']:,.2f}", f"खरेदी: ₹{active['trade_val']:,.2f}")
 
     m4, m5, m6 = st.columns(3)
-    m4.metric("Target 2 निव्वळ नफा", f"₹{active['net_profit']:,.2f}", f"ROI: {active['roi']}%")
-    m5.metric("SL वर प्रत्यक्ष तोटा", f"₹{active['net_loss']:,.2f}", f"Breakeven: ₹{active['breakeven']:,.2f}")
-    m6.metric("एकूण कर व व्याज", f"₹{active['total_charges']:,.2f}", f"व्याज: ₹{active['interest']:,.2f}")
+    with m4:
+        with st.container(border=True):
+            st.metric("Target 2 निव्वळ नफा", f"₹{active['net_profit']:,.2f}", f"ROI: {active['roi']}%")
+    with m5:
+        with st.container(border=True):
+            st.metric("SL वर प्रत्यक्ष तोटा", f"₹{active['net_loss']:,.2f}", f"Breakeven: ₹{active['breakeven']:,.2f}")
+    with m6:
+        with st.container(border=True):
+            st.metric("एकूण कर व व्याज", f"₹{active['total_charges']:,.2f}", f"व्याज: ₹{active['interest']:,.2f}")
+
 
     if product == "MTF Swing":
         st.warning(f"🚨 **MTF Margin Call धोक्याची किंमत:** ₹{active['danger_price']:,.2f} (फंडिंग रक्कम: ₹{active['funded_amt']:,.2f})")
