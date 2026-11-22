@@ -3,12 +3,13 @@ import io
 import json
 import pandas as pd
 import streamlit as st
+import plotly.express as px
 import yfinance as yf
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-st.set_page_config(page_title="Nifty 500 MTF & MIS Pro", page_icon="📈", layout="centered")
+st.set_page_config(page_title="Nifty 500 MTF & MIS Pro", page_icon="📈", layout="wide")
 
 NIFTY_FILE = "Nifty_500_Stocks.xlsx"
 MARGIN_FILE = "Zerodha_Dhan Margin Calculator.xlsx"
@@ -28,6 +29,24 @@ def get_gdrive_service():
     except Exception as e:
         return None, None, f"Drive कनेक्शन त्रुटी: {e}"
 
+
+@st.cache_data(ttl=900)
+def fetch_all_live_prices(symbols_tuple):
+    prices = {}
+    try:
+        tickers = [f"{s}.NS" for s in symbols_tuple if s and not s.startswith("DUMMY")]
+        data = yf.download(tickers, period="2d", progress=False)
+        if "Close" in data:
+            close_df = data["Close"]
+            for s in symbols_tuple:
+                col_name = f"{s}.NS"
+                if col_name in close_df.columns:
+                    vals = close_df[col_name].dropna()
+                    if not vals.empty:
+                        prices[s] = round(float(vals.iloc[-1]), 2)
+    except Exception:
+        pass
+    return prices
 
 @st.cache_data(ttl=3600)
 def load_stocks_and_margins():
@@ -88,18 +107,11 @@ def load_stocks_and_margins():
             if stocks:
                 break
 
-    return pd.DataFrame(stocks)
-
-
-@st.cache_data(ttl=300)
-def get_live_cmp(symbol):
-    try:
-        hist = yf.Ticker(f"{symbol}.NS").history(period="5d")
-        if not hist.empty:
-            return round(float(hist["Close"].iloc[-1]), 2)
-    except Exception:
-        pass
-    return 0.0
+    df_res = pd.DataFrame(stocks)
+    if not df_res.empty:
+        live_map = fetch_all_live_prices(tuple(df_res["Symbol"].tolist()))
+        df_res["Live_CMP"] = df_res["Symbol"].map(live_map).fillna(0.0)
+    return df_res
 
 @st.cache_data(ttl=900)
 def fetch_latest_gdrive_reports():
@@ -158,7 +170,7 @@ def fetch_master_trade_journal():
         q_f = f"name='Master_Trade_Journal.xlsx' and '{j_id}' in parents and trashed=false"
         f_res = service.files().list(q=q_f, fields="files(id)").execute().get("files", [])
         if not f_res:
-            return None, "अजून 'Master_Trade_Journal.xlsx' तयार झालेली नाही. आधी Tradebooks_Drop_Here मध्ये फाईल टाकून Weekly Sync रन करा."
+            return None, "अजून 'Master_Trade_Journal.xlsx' तयार झालेली नाही."
 
         file_id = next(iter(f_res)).get("id")
         request = service.files().get_media(fileId=file_id)
@@ -174,7 +186,6 @@ def fetch_master_trade_journal():
         return sheets_data, None
     except Exception as e:
         return None, f"जर्नल वाचताना त्रुटी: {e}"
-
 
 def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct, margin_pct):
     m_dec = margin_pct / 100.0
@@ -247,105 +258,90 @@ def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct,
         "p1_profit": p1_profit, "p2_profit": p2_profit, "partial_total": partial_total
     }
 
-def render_app():
-    st.title("📈 Nifty 500 MTF & MIS Pro")
-    st.caption("Dhan, Zerodha, FYERS, Groww — पोझिशन सायझिंग, ब्रेकआऊट रिपोर्ट्स आणि ट्रेड जर्नल")
+def render_tab1_calculator(df_stocks):
+    col_b, col_p = st.columns(2)
+    broker = col_b.selectbox("ब्रोकर निवडा", ["Dhan", "Zerodha"])
+    product = col_p.selectbox("प्रॉडक्ट प्रकार", ["MTF Swing", "MIS Intraday"])
 
-    df_stocks = load_stocks_and_margins()
-    if df_stocks.empty:
-        st.error("Nifty_500_Stocks.xlsx सापडली नाही! कृपया GitHub रेपॉझिटरी तपासा.")
-        return
+    symbols = df_stocks["Symbol"].tolist()
+    default_idx = symbols.index("RELIANCE") if "RELIANCE" in symbols else 0
+    selected_sym = st.selectbox("🔍 Nifty 500 शेअर निवडा (टाईप करून शोधा)", symbols, index=default_idx)
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🧮 कॅल्क्युलेटर",
-        "🚀 ब्रेकआऊट रिपोर्ट्स",
-        "📊 ५०० शेअर्स मार्जिन",
-        "🏆 ट्रेड जर्नल (P&L)"
-    ])
+    stock_row = df_stocks[df_stocks["Symbol"] == selected_sym].to_dict("records").pop(0)
+    live_cmp = float(stock_row.get("Live_CMP", 0.0))
 
-    with tab1:
-        col_b, col_p = st.columns(2)
-        broker = col_b.selectbox("ब्रोकर निवडा", ["Dhan", "Zerodha"])
-        product = col_p.selectbox("प्रॉडक्ट प्रकार", ["MTF Swing", "MIS Intraday"])
+    st.info(f"**{stock_row['Company']}** ({stock_row['Industry']}) | लाइव्ह भाव: **₹{live_cmp:,.2f}**")
 
-        symbols = df_stocks["Symbol"].tolist()
-        default_idx = symbols.index("RELIANCE") if "RELIANCE" in symbols else 0
-        selected_sym = st.selectbox("🔍 Nifty 500 शेअर निवडा (टाईप करून शोधा)", symbols, index=default_idx)
+    c1, c2 = st.columns(2)
+    capital = c1.number_input("तुमचे भांडवल (₹)", min_value=1000.0, value=10000.0, step=1000.0)
+    risk_pct = c2.number_input("प्रति ट्रेड जोखीम (%)", min_value=0.1, max_value=20.0, value=2.0, step=0.5)
 
-        stock_row = df_stocks[df_stocks["Symbol"] == selected_sym].iloc.to_dict() if False else df_stocks[df_stocks["Symbol"] == selected_sym].to_dict("records").pop(0)
-        live_cmp = get_live_cmp(selected_sym)
+    default_entry = live_cmp if live_cmp > 0 else 1300.0
+    c3, c4 = st.columns(2)
+    entry = c3.number_input("खरेदी किंमत Entry (₹)", min_value=1.0, value=float(default_entry), step=1.0)
+    sl = c4.number_input("स्टॉप लॉस SL (₹)", min_value=0.5, value=round(float(default_entry) * 0.97, 2), step=1.0)
 
-        st.info(f"**{stock_row['Company']}** ({stock_row['Industry']}) | लाइव्ह भाव: **₹{live_cmp:,.2f}**")
+    c5, c6, c7 = st.columns(3)
+    t1 = c5.number_input("Target 1 (50% Book ₹)", min_value=1.0, value=round(float(default_entry) * 1.05, 2), step=1.0)
+    t2 = c6.number_input("Target 2 (Final ₹)", min_value=1.0, value=round(float(default_entry) * 1.10, 2), step=1.0)
+    days = c7.number_input("होल्डिंग दिवस", min_value=0, max_value=365, value=10 if product == "MTF Swing" else 0)
 
-        c1, c2 = st.columns(2)
-        capital = c1.number_input("तुमचे भांडवल (₹)", min_value=1000.0, value=10000.0, step=1000.0)
-        risk_pct = c2.number_input("प्रति ट्रेड जोखीम (%)", min_value=0.1, max_value=20.0, value=2.0, step=0.5)
+    dhan_m = stock_row["MIS"] if product == "MIS Intraday" else stock_row["Dhan_MTF"]
+    zero_m = stock_row["MIS"] if product == "MIS Intraday" else stock_row["Zerodha_MTF"]
 
-        default_entry = live_cmp if live_cmp > 0 else 1300.0
-        c3, c4 = st.columns(2)
-        entry = c3.number_input("खरेदी किंमत Entry (₹)", min_value=1.0, value=float(default_entry), step=1.0)
-        sl = c4.number_input("स्टॉप लॉस SL (₹)", min_value=0.5, value=round(float(default_entry) * 0.97, 2), step=1.0)
+    res_dhan = calculate_trade("Dhan", product, capital, entry, sl, t1, t2, days, risk_pct, dhan_m)
+    res_zero = calculate_trade("Zerodha", product, capital, entry, sl, t1, t2, days, risk_pct, zero_m)
+    active = res_dhan if broker == "Dhan" else res_zero
 
-        c5, c6, c7 = st.columns(3)
-        t1 = c5.number_input("Target 1 (50% Book)", min_value=1.0, value=round(float(default_entry) * 1.05, 2), step=1.0)
-        t2 = c6.number_input("Target 2 (Final)", min_value=1.0, value=round(float(default_entry) * 1.10, 2), step=1.0)
-        days = c7.number_input("होल्डिंग दिवस", min_value=0, max_value=365, value=10 if product == "MTF Swing" else 0)
+    st.divider()
+    st.subheader(f"🎯 {broker} ({product}) निकाल")
 
-        dhan_m = stock_row["MIS"] if product == "MIS Intraday" else stock_row["Dhan_MTF"]
-        zero_m = stock_row["MIS"] if product == "MIS Intraday" else stock_row["Zerodha_MTF"]
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Safe Qty (२% रिस्क)", f"{active['safe_qty']} शेअर्स", f"Max Qty: {active['max_qty']}")
+    m2.metric("लीव्हरेज / मार्जिन", f"{active['leverage']}x", f"{dhan_m if broker=='Dhan' else zero_m}%")
+    m3.metric("तुमचे वापरलेले भांडवल", f"₹{active['margin_used']:,.2f}", f"खरेदी: ₹{active['trade_val']:,.2f}")
 
-        res_dhan = calculate_trade("Dhan", product, capital, entry, sl, t1, t2, days, risk_pct, dhan_m)
-        res_zero = calculate_trade("Zerodha", product, capital, entry, sl, t1, t2, days, risk_pct, zero_m)
-        active = res_dhan if broker == "Dhan" else res_zero
+    m4, m5, m6 = st.columns(3)
+    m4.metric("Target 2 निव्वळ नफा", f"₹{active['net_profit']:,.2f}", f"ROI: {active['roi']}%")
+    m5.metric("SL वर प्रत्यक्ष तोटा", f"₹{active['net_loss']:,.2f}", f"Breakeven: ₹{active['breakeven']:,.2f}")
+    m6.metric("एकूण कर व व्याज", f"₹{active['total_charges']:,.2f}", f"व्याज: ₹{active['interest']:,.2f}")
 
-        st.divider()
-        st.subheader(f"🎯 {broker} ({product}) निकाल")
+    if product == "MTF Swing":
+        st.warning(f"🚨 **MTF Margin Call धोक्याची किंमत:** ₹{active['danger_price']:,.2f} (फंडिंग रक्कम: ₹{active['funded_amt']:,.2f})")
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Safe Qty (२% रिस्क)", f"{active['safe_qty']} शेअर्स", f"Max Qty: {active['max_qty']}")
-        m2.metric("लीव्हरेज / मार्जिन", f"{active['leverage']}x", f"{dhan_m if broker=='Dhan' else zero_m}%")
-        m3.metric("तुमचे वापरलेले भांडवल", f"₹{active['margin_used']:,.0f}", f"खरेदी: ₹{active['trade_val']:,.0f}")
+    st.subheader("💰 ५०% अर्धा नफा बुकिंग प्लॅनर")
+    partial_df = pd.DataFrame({
+        "टप्पा (Stage)": ["टप्पा १: Target 1 (50% Book)", "टप्पा २: Target 2 (उरलेले 50%)", "एकूण एकत्रित निव्वळ नफा"],
+        "विक्री किंमत": [f"₹{t1:,.2f}", f"₹{t2:,.2f}", "-"],
+        "शेअर्स (Qty)": [f"{active['half_qty']} शेअर्स", f"{active['rem_qty']} शेअर्स", f"{active['safe_qty']} शेअर्स"],
+        "निव्वळ नफा": [f"₹{active['p1_profit']:,.2f}", f"₹{active['p2_profit']:,.2f}", f"₹{active['partial_total']:,.2f}"]
+    })
+    st.dataframe(partial_df, use_container_width=True, hide_index=True)
 
-        m4, m5, m6 = st.columns(3)
-        m4.metric("Target 2 निव्वळ नफा", f"₹{active['net_profit']:,.2f}", f"ROI: {active['roi']}%")
-        m5.metric("SL वर प्रत्यक्ष तोटा", f"₹{active['net_loss']:,.2f}", f"Breakeven: ₹{active['breakeven']}")
-        m6.metric("एकूण कर व व्याज", f"₹{active['total_charges']:,.2f}", f"व्याज: ₹{active['interest']}")
+    st.subheader("⚔️ Dhan विरुद्ध Zerodha थेट तुलना")
+    comp_df = pd.DataFrame({
+        "तपशील": ["मार्जिन %", "ब्रोकरेज", "MTF व्याज", "सरकारी कर व DP", "एकूण खर्च", "Target 2 निव्वळ नफा"],
+        "Dhan": [f"{dhan_m}%", f"₹{res_dhan['brokerage']:,.2f}", f"₹{res_dhan['interest']:,.2f}", f"₹{res_dhan['taxes']:,.2f}", f"₹{res_dhan['total_charges']:,.2f}", f"₹{res_dhan['net_profit']:,.2f}"],
+        "Zerodha": [f"{zero_m}%", f"₹{res_zero['brokerage']:,.2f}", f"₹{res_zero['interest']:,.2f}", f"₹{res_zero['taxes']:,.2f}", f"₹{res_zero['total_charges']:,.2f}", f"₹{res_zero['net_profit']:,.2f}"],
+    })
+    st.dataframe(comp_df, use_container_width=True, hide_index=True)
 
-        if product == "MTF Swing":
-            st.warning(f"🚨 **MTF Margin Call धोक्याची किंमत:** ₹{active['danger_price']:,.2f} (फंडिंग रक्कम: ₹{active['funded_amt']:,.0f})")
+    diff = round(res_dhan["net_profit"] - res_zero["net_profit"], 2)
+    if diff > 0:
+        st.success(f"✅ **Dhan** वर तुम्हाला **₹{diff:,.2f} जास्त निव्वळ नफा** उरतो!")
+    elif diff < 0:
+        st.success(f"✅ **Zerodha** वर तुम्हाला **₹{abs(diff):,.2f} जास्त निव्वळ नफा** उरतो!")
 
-        st.subheader("💰 ५०% अर्धा नफा बुकिंग प्लॅनर")
-        partial_df = pd.DataFrame({
-            "टप्पा (Stage)": ["टप्पा १: Target 1 (50% Book)", "टप्पा २: Target 2 (उरलेले 50%)", "एकूण एकत्रित निव्वळ नफा"],
-            "विक्री किंमत (₹)": [f"₹{t1:,.2f}", f"₹{t2:,.2f}", "-"],
-            "शेअर्स (Qty)": [f"{active['half_qty']}", f"{active['rem_qty']}", f"{active['safe_qty']}"],
-            "निव्वळ नफा (₹)": [f"₹{active['p1_profit']:,.2f}", f"₹{active['p2_profit']:,.2f}", f"₹{active['partial_total']:,.2f}"]
-        })
-        st.dataframe(partial_df, use_container_width=True, hide_index=True)
+    st.subheader("🛡️ Trailing Stop-Loss (TSL) प्लॅनर")
+    risk_pts = abs(entry - sl)
+    tsl_df = pd.DataFrame({
+        "टप्पा": ["1R (1:1)", "1.5R (1:1.5)", "2R (1:2)", "3R (1:3)"],
+        "Trigger किंमत": [f"₹{entry + risk_pts:,.2f}", f"₹{entry + 1.5 * risk_pts:,.2f}", f"₹{entry + 2 * risk_pts:,.2f}", f"₹{entry + 3 * risk_pts:,.2f}"],
+        "नवीन Trailing SL": [f"₹{active['breakeven']:,.2f}", f"₹{entry + 0.5 * risk_pts:,.2f}", f"₹{entry + risk_pts:,.2f}", f"₹{entry + 2 * risk_pts:,.2f}"],
+    })
+    st.dataframe(tsl_df, use_container_width=True, hide_index=True)
 
-        st.subheader("⚔️ Dhan विरुद्ध Zerodha थेट तुलना")
-        comp_df = pd.DataFrame({
-            "तपशील": ["मार्जिन %", "ब्रोकरेज (₹)", "MTF व्याज (₹)", "सरकारी कर व DP (₹)", "एकूण खर्च (₹)", "Target 2 निव्वळ नफा (₹)"],
-            "Dhan": [f"{dhan_m}%", res_dhan["brokerage"], res_dhan["interest"], res_dhan["taxes"], res_dhan["total_charges"], res_dhan["net_profit"]],
-            "Zerodha": [f"{zero_m}%", res_zero["brokerage"], res_zero["interest"], res_zero["taxes"], res_zero["total_charges"], res_zero["net_profit"]],
-        })
-        st.dataframe(comp_df, use_container_width=True, hide_index=True)
-
-        diff = round(res_dhan["net_profit"] - res_zero["net_profit"], 2)
-        if diff > 0:
-            st.success(f"✅ **Dhan** वर तुम्हाला **₹{diff:,.2f} जास्त निव्वळ नफा** उरतो!")
-        elif diff < 0:
-            st.success(f"✅ **Zerodha** वर तुम्हाला **₹{abs(diff):,.2f} जास्त निव्वळ नफा** उरतो!")
-
-        st.subheader("🛡️ Trailing Stop-Loss (TSL) प्लॅनर")
-        risk_pts = abs(entry - sl)
-        tsl_df = pd.DataFrame({
-            "टप्पा": ["1R (1:1)", "1.5R (1:1.5)", "2R (1:2)", "3R (1:3)"],
-            "Trigger किंमत (₹)": [round(entry + risk_pts, 2), round(entry + 1.5 * risk_pts, 2), round(entry + 2 * risk_pts, 2), round(entry + 3 * risk_pts, 2)],
-            "नवीन Trailing SL (₹)": [active["breakeven"], round(entry + 0.5 * risk_pts, 2), round(entry + risk_pts, 2), round(entry + 2 * risk_pts, 2)],
-        })
-        st.dataframe(tsl_df, use_container_width=True, hide_index=True)
-
+def render_tab2_and_tab3(tab2, tab3, df_stocks):
     with tab2:
         st.subheader("🚀 Google Drive वरील आजचे ब्रेकआऊट आणि सेक्टर रिपोर्ट्स")
         folder_date, rep_files, service_or_msg = fetch_latest_gdrive_reports()
@@ -369,15 +365,15 @@ def render_app():
                 fh.seek(0)
 
                 if chosen_name.endswith(".csv"):
-                    st.dataframe(pd.read_csv(fh), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.read_csv(fh), use_container_width=True, hide_index=True, height=600)
                 else:
                     xl_rep = pd.ExcelFile(fh)
                     sheet_sel = st.selectbox("शीट (Tab) निवडा", xl_rep.sheet_names)
-                    st.dataframe(pd.read_excel(xl_rep, sheet_name=sheet_sel), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.read_excel(xl_rep, sheet_name=sheet_sel), use_container_width=True, hide_index=True, height=600)
 
     with tab3:
-        st.subheader("सर्व Nifty 500 शेअर्सची Dhan व Zerodha MTF यादी")
-        search_q = st.text_input("कंपनी किंवा सेक्टर शोधा (उदा. BANK, TATA, PHARMA)")
+        st.subheader(f"📊 सर्व Nifty 500 शेअर्सची Live CMP आणि मार्जिन यादी ({len(df_stocks)} शेअर्स)")
+        search_q = st.text_input("कंपनी, सिम्बॉल किंवा सेक्टर शोधा (उदा. RELIANCE, BANK, TATA, PHARMA)")
         view_df = df_stocks.copy()
         if search_q:
             view_df = view_df[
@@ -385,49 +381,184 @@ def render_app():
                 view_df["Company"].str.contains(search_q, case=False) |
                 view_df["Industry"].str.contains(search_q, case=False)
             ]
-        st.dataframe(view_df, use_container_width=True, hide_index=True)
+        st.dataframe(
+            view_df,
+            use_container_width=True,
+            hide_index=True,
+            height=700,
+            column_config={
+                "Live_CMP": st.column_config.NumberColumn("Live CMP (₹)", format="₹%.2f"),
+                "Dhan_MTF": st.column_config.NumberColumn("Dhan MTF %", format="%.2f%%"),
+                "Zerodha_MTF": st.column_config.NumberColumn("Zerodha MTF %", format="%.2f%%"),
+                "MIS": st.column_config.NumberColumn("MIS Intraday %", format="%.2f%%"),
+            }
+        )
 
+def add_total_row(df_in, label_col):
+    df_clean = df_in[df_in[label_col].astype(str).str.upper() != "TOTAL"].copy()
+    tot_c = int(df_clean["Closed Trades"].sum())
+    tot_w = int(df_clean["Wins"].sum())
+    tot_l = int(df_clean["Losses"].sum())
+    tot_wr = round((tot_w / tot_c) * 100, 1) if tot_c > 0 else 0.0
+    tot_row = pd.DataFrame([{
+        label_col: "TOTAL",
+        "Closed Trades": tot_c,
+        "Wins": tot_w,
+        "Losses": tot_l,
+        "Win Rate %": tot_wr,
+        "Gross P&L (₹)": round(df_clean["Gross P&L (₹)"].sum(), 2),
+        "Charges & Tax (₹)": round(df_clean["Charges & Tax (₹)"].sum(), 2),
+        "Net P&L (₹)": round(df_clean["Net P&L (₹)"].sum(), 2),
+    }])
+    return pd.concat([df_clean, tot_row], ignore_index=True)
+
+
+def render_tab4_journal(tab4):
     with tab4:
-        st.subheader("🏆 एकत्रित ट्रेड जर्नल व खातेधारक कामगिरी (All Brokers)")
+        st.subheader("🏆 एकत्रित ट्रेड जर्नल व इंटरॲक्टिव्ह डॅशबोर्ड")
         if st.button("🔄 ताजा डेटा रिफ्रेश करा"):
             st.cache_data.clear()
 
         sheets_data, j_err = fetch_master_trade_journal()
         if j_err:
             st.info(j_err)
-        elif sheets_data and "All_Trades_Journal" in sheets_data:
+            return
+
+        if sheets_data and "All_Trades_Journal" in sheets_data:
             all_df = sheets_data["All_Trades_Journal"]
 
             holders = ["सर्व (All)"] + sorted(all_df["ACCOUNT_HOLDER"].dropna().unique().tolist())
             sel_holder = st.selectbox("👤 खातेधारक निवडा (Account Holder Filter)", holders)
 
-            filtered_df = all_df if sel_holder == "सर्व (All)" else all_df[all_df["ACCOUNT_HOLDER"] == sel_holder]
-            closed_df = filtered_df[filtered_df["STATUS"].isin(["WIN", "LOSS"])]
+            filtered_df = all_df if sel_holder == "सर्व (All)" else all_df[all_df["ACCOUNT_HOLDER"] == sel_holder].copy()
+            closed_df = filtered_df[filtered_df["STATUS"].isin(["WIN", "LOSS"])].copy()
             open_cnt = len(filtered_df[filtered_df["STATUS"] == "OPEN"])
 
             tot_trades = len(closed_df)
             wins = len(closed_df[closed_df["STATUS"] == "WIN"])
+            losses = len(closed_df[closed_df["STATUS"] == "LOSS"])
             win_rate = round((wins / tot_trades) * 100, 1) if tot_trades > 0 else 0.0
             net_pnl = round(closed_df["NET_PNL"].sum(), 2) if tot_trades > 0 else 0.0
             tot_charges = round(closed_df["CHARGES_TAX"].sum(), 2) if tot_trades > 0 else 0.0
 
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("निव्वळ नफा (Net P&L)", f"₹{net_pnl:,.2f}")
-            k2.metric("Win Rate %", f"{win_rate}%", f"{wins}/{tot_trades} Wins")
+            k2.metric("Win Rate %", f"{win_rate}%", f"{wins}W / {losses}L")
             k3.metric("कर व ब्रोकरेज", f"₹{tot_charges:,.2f}")
             k4.metric("चालू ट्रेड्स (OPEN)", f"{open_cnt}")
 
-            if sel_holder == "सर्व (All)" and "Account_Holder_Summary" in sheets_data:
-                st.subheader("👥 खातेधारकानुसार सारांश (Account Holder Summary)")
-                st.dataframe(sheets_data["Account_Holder_Summary"], use_container_width=True, hide_index=True)
+            if not closed_df.empty:
+                closed_df = closed_df.reset_index(drop=True)
+                closed_df["Trade_No"] = range(1, len(closed_df) + 1)
+                closed_df["Cumulative_PnL"] = closed_df["NET_PNL"].cumsum().round(2)
 
-            if "Broker_Summary" in sheets_data and sel_holder == "सर्व (All)":
-                st.subheader("🏦 ब्रोकरनुसार कामगिरी (Zerodha, FYERS, Groww, Dhan)")
-                st.dataframe(sheets_data["Broker_Summary"], use_container_width=True, hide_index=True)
+                g1, g2 = st.columns(2)
+                with g1:
+                    fig_eq = px.area(
+                        closed_df, x="Trade_No", y="Cumulative_PnL",
+                        hover_data=["SYMBOL", "ACCOUNT_HOLDER", "BROKER", "NET_PNL"],
+                        title="📈 एकूण भांडवल वाढ आलेख (Equity Curve ₹)",
+                        color_discrete_sequence=["#00A86B"]
+                    )
+                    fig_eq.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
+                    st.plotly_chart(fig_eq, use_container_width=True)
+
+                with g2:
+                    pie_df = pd.DataFrame({"Result": ["Wins", "Losses"], "Count": [wins, losses]})
+                    fig_pie = px.pie(
+                        pie_df, values="Count", names="Result", hole=0.55,
+                        title="🎯 Win vs Loss प्रमाण (Trade Sentiment)",
+                        color="Result", color_discrete_map={"Wins": "#00A86B", "Losses": "#E74C3C"}
+                    )
+                    fig_pie.update_traces(textinfo="value+percent")
+                    fig_pie.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
+                    st.plotly_chart(fig_pie, use_container_width=True)
+
+                if sel_holder == "सर्व (All)":
+                    g3, g4 = st.columns(2)
+                    with g3:
+                        acc_grp = closed_df.groupby("ACCOUNT_HOLDER", as_index=False)["NET_PNL"].sum()
+                        acc_grp["Label"] = acc_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K")
+                        fig_acc = px.bar(
+                            acc_grp, x="ACCOUNT_HOLDER", y="NET_PNL", text="Label",
+                            title="👥 खातेधारकानुसार निव्वळ नफा (₹)",
+                            color="NET_PNL", color_continuous_scale=["#E74C3C", "#2ECC71"]
+                        )
+                        fig_acc.update_traces(textposition="outside")
+                        fig_acc.update_layout(height=350, showlegend=False, coloraxis_showscale=False, margin=dict(l=10, r=10, t=45, b=10))
+                        st.plotly_chart(fig_acc, use_container_width=True)
+
+                    with g4:
+                        brk_grp = closed_df.groupby("BROKER", as_index=False)["NET_PNL"].sum()
+                        brk_grp["Label"] = brk_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K")
+                        fig_brk = px.bar(
+                            brk_grp, x="BROKER", y="NET_PNL", text="Label",
+                            title="🏦 ब्रोकरनुसार निव्वळ नफा (₹)",
+                            color="BROKER"
+                        )
+                        fig_brk.update_traces(textposition="outside")
+                        fig_brk.update_layout(height=350, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
+                        st.plotly_chart(fig_brk, use_container_width=True)
+
+            summary_col_cfg = {
+                "Win Rate %": st.column_config.NumberColumn(format="%.1f%%"),
+                "Gross P&L (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                "Charges & Tax (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                "Net P&L (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+            }
+
+            if sel_holder == "सर्व (All)" and "Account_Holder_Summary" in sheets_data:
+                st.subheader("👥 खातेधारकानुसार सारांश (TOTAL सह)")
+                st.dataframe(
+                    add_total_row(sheets_data["Account_Holder_Summary"], "Account Holder"),
+                    use_container_width=True, hide_index=True, column_config=summary_col_cfg
+                )
+
+            if sel_holder == "सर्व (All)" and "Broker_Summary" in sheets_data:
+                st.subheader("🏦 ब्रोकरनुसार कामगिरी (TOTAL सह)")
+                st.dataframe(
+                    add_total_row(sheets_data["Broker_Summary"], "Broker"),
+                    use_container_width=True, hide_index=True, column_config=summary_col_cfg
+                )
 
             st.subheader("📋 सर्व ट्रेड्सची यादी (Detailed Trades)")
+            st.dataframe(
+                filtered_df,
+                use_container_width=True,
+                hide_index=True,
+                height=550,
+                column_config={
+                    "ENTRY_PRICE": st.column_config.NumberColumn("Entry (₹)", format="₹%.2f"),
+                    "EXIT_PRICE": st.column_config.NumberColumn("Exit (₹)", format="₹%.2f"),
+                    "GROSS_PNL": st.column_config.NumberColumn("Gross P&L (₹)", format="₹%.2f"),
+                    "CHARGES_TAX": st.column_config.NumberColumn("Charges (₹)", format="₹%.2f"),
+                    "NET_PNL": st.column_config.NumberColumn("Net P&L (₹)", format="₹%.2f"),
+                    "CUMULATIVE_PNL": st.column_config.NumberColumn("Cumulative P&L (₹)", format="₹%.2f"),
+                    "RETURN_%": st.column_config.NumberColumn("Return %", format="%.2f%%"),
+                }
+            )
 
-            st.dataframe(filtered_df, use_container_width=True, hide_index=True)
+
+def render_app():
+    st.title("📈 Nifty 500 MTF & MIS Pro")
+    st.caption("Dhan, Zerodha, FYERS, Groww — पोझिशन सायझिंग, ब्रेकआऊट रिपोर्ट्स आणि ट्रेड जर्नल")
+
+    df_stocks = load_stocks_and_margins()
+    if df_stocks.empty:
+        st.error("Nifty_500_Stocks.xlsx सापडली नाही! कृपया GitHub रेपॉझिटरी तपासा.")
+        return
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🧮 कॅल्क्युलेटर",
+        "🚀 ब्रेकआऊट रिपोर्ट्स",
+        "📊 ५०० शेअर्स मार्जिन",
+        "🏆 ट्रेड जर्नल (P&L)"
+    ])
+
+    with tab1:
+        render_tab1_calculator(df_stocks)
+    render_tab2_and_tab3(tab2, tab3, df_stocks)
+    render_tab4_journal(tab4)
 
 
 if __name__ == "__main__":
