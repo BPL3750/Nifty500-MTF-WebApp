@@ -341,6 +341,26 @@ def render_tab1_calculator(df_stocks):
     })
     st.dataframe(tsl_df, use_container_width=True, hide_index=True)
 
+def get_smart_col_config(df):
+    """रिपोर्टमधील किंमत आणि रकमेच्या कॉलम्सना आपोआप ₹ फॉरमॅट लावणे"""
+    cfg = {}
+    price_keywords = (
+        "PRICE", "CMP", "TARGET", "SL", "ATH", "DMA", "HIGH", "LOW",
+        "AMT", "AMOUNT", "VALUE", "MOVE", "GAIN", "LOSS", "PNL"
+    )
+    exclude_keywords = ("QTY", "SCORE", "RATIO", "DATE", "DAYS", "COUNT", "ID")
+
+    for col in df.columns:
+        u_col = str(col).strip().upper()
+        if any(ex in u_col for ex in exclude_keywords):
+            continue
+        if "%" in u_col or "PCT" in u_col:
+            cfg[col] = st.column_config.NumberColumn(format="%.2f%%")
+        elif any(pk in u_col for pk in price_keywords):
+            cfg[col] = st.column_config.NumberColumn(format="₹%.2f")
+    return cfg
+
+
 def render_tab2_and_tab3(tab2, tab3, df_stocks):
     with tab2:
         st.subheader("🚀 Google Drive वरील आजचे ब्रेकआऊट आणि सेक्टर रिपोर्ट्स")
@@ -365,11 +385,19 @@ def render_tab2_and_tab3(tab2, tab3, df_stocks):
                 fh.seek(0)
 
                 if chosen_name.endswith(".csv"):
-                    st.dataframe(pd.read_csv(fh), use_container_width=True, hide_index=True, height=600)
+                    rep_df = pd.read_csv(fh)
                 else:
                     xl_rep = pd.ExcelFile(fh)
                     sheet_sel = st.selectbox("शीट (Tab) निवडा", xl_rep.sheet_names)
-                    st.dataframe(pd.read_excel(xl_rep, sheet_name=sheet_sel), use_container_width=True, hide_index=True, height=600)
+                    rep_df = pd.read_excel(xl_rep, sheet_name=sheet_sel)
+
+                st.dataframe(
+                    rep_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=600,
+                    column_config=get_smart_col_config(rep_df)
+                )
 
     with tab3:
         st.subheader(f"📊 सर्व Nifty 500 शेअर्सची Live CMP आणि मार्जिन यादी ({len(df_stocks)} शेअर्स)")
@@ -393,6 +421,7 @@ def render_tab2_and_tab3(tab2, tab3, df_stocks):
                 "MIS": st.column_config.NumberColumn("MIS Intraday %", format="%.2f%%"),
             }
         )
+
 
 def add_total_row(df_in, label_col):
     df_clean = df_in[df_in[label_col].astype(str).str.upper() != "TOTAL"].copy()
