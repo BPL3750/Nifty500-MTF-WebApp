@@ -113,8 +113,6 @@ def load_stocks_and_margins():
         df_res["Live_CMP"] = df_res["Symbol"].map(live_map).fillna(0.0)
     return df_res
 
-@st.cache_data(ttl=900)
-
 import re
 from datetime import datetime
 
