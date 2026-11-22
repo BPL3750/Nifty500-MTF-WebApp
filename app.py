@@ -1141,20 +1141,53 @@ def render_price_volume_tab(tab_obj, df_stocks):
                 else:
                     st.info("सेक्टर तुलना डेटा उपलब्ध नाही.")
 
-        # अचूक नावासह थेट CSV डाउनलोड बटन
-        export_df = show_df.drop(columns=["Signal_Category"], errors="ignore")
+        with g_right:
+            with st.container(border=True):
+                tree_df = show_df.head(35).copy() if not show_df.empty else pd.DataFrame()
+                if not tree_df.empty:
+                    tree_df["Box_Size"] = tree_df[ratio_col].clip(lower=0.1)
+                    fig_tree = px.treemap(
+                        tree_df,
+                        path=[px.Constant("सर्व सेक्टर्स"), "Sector", "Symbol"],
+                        values="Box_Size",
+                        color=chg_col,
+                        color_continuous_scale=["#E74C3C", "#F8F9FA", "#00A86B"],
+                        color_continuous_midpoint=0,
+                        hover_data=["Company", "CMP (₹)", ratio_col, chg_col],
+                        title="🏭 सेक्टर आणि त्यातील नेमके शेअर्स (Sector -> Stock Map)"
+                    )
+                    fig_tree.update_traces(textinfo="label", root_color="#F1F3F5")
+                    fig_tree.update_layout(
+                        height=440,
+                        coloraxis_showscale=False,
+                        margin=dict(l=5, r=5, t=45, b=5)
+                    )
+                    st.plotly_chart(fig_tree, use_container_width=True)
+                else:
+                    st.info("सेक्टर नकाशासाठी डेटा उपलब्ध नाही.")
+
+        # सेक्टर फिल्टर आणि अचूक नावासह थेट CSV डाउनलोड बटन
+        export_df = show_df.drop(columns=["Signal_Category"], errors="ignore").copy()
+        sec_options = ["सर्व सेक्टर्स (All Sectors)"] + sorted(export_df["Sector"].dropna().unique().tolist())
+
+        f_sec, dl_c2 = st.columns((2.5, 1.2))
+        sel_sec = f_sec.selectbox("🏭 सेक्टरनुसार फिल्टर करा (Sector Filter)", sec_options, key="pv_sec_filter")
+        if sel_sec != "सर्व सेक्टर्स (All Sectors)":
+            export_df = export_df[export_df["Sector"] == sel_sec]
+
         today_str = datetime.now().strftime("%d-%b-%Y")
         dl_filename = f"{clean_file_prefix}_{len(export_df)}_Stocks_{today_str}.csv"
 
-        dl_c1, dl_c2 = st.columns((3, 1.2))
-        dl_c1.markdown(f"**📋 निवडलेली यादी ({len(export_df)} शेअर्स):**")
-        dl_c2.download_button(
-            label="📥 ही यादी CSV डाउनलोड करा",
-            data=export_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name=dl_filename,
-            mime="text/csv",
-            use_container_width=True
-        )
+        with dl_c2:
+            st.write("")
+            st.download_button(
+                label=f"📥 CSV डाउनलोड ({len(export_df)})",
+                data=export_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name=dl_filename,
+                mime="text/csv",
+                use_container_width=True
+            )
+
 
         st.dataframe(
             export_df,
