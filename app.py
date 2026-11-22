@@ -1,3 +1,4 @@
+"भाग १ (Part 1 of 10): सेटअप, Google Drive आणि Live CMP"
 import os
 import io
 import json
@@ -47,6 +48,8 @@ def fetch_all_live_prices(symbols_tuple):
     except Exception:
         pass
     return prices
+
+"भाग २ (Part 2 of 10): Nifty 500 शेअर्स आणि Dhan/Zerodha मार्जिन लोड करणे"
 
 @st.cache_data(ttl=3600)
 def load_stocks_and_margins():
@@ -112,6 +115,8 @@ def load_stocks_and_margins():
         live_map = fetch_all_live_prices(tuple(df_res["Symbol"].tolist()))
         df_res["Live_CMP"] = df_res["Symbol"].map(live_map).fillna(0.0)
     return df_res
+
+"भाग ३ (Part 3 of 10): Google Drive रिपोर्ट्स आणि Master Trade Journal वाचणे"
 
 @st.cache_data(ttl=900)
 def fetch_latest_gdrive_reports():
@@ -187,6 +192,8 @@ def fetch_master_trade_journal():
     except Exception as e:
         return None, f"जर्नल वाचताना त्रुटी: {e}"
 
+"भाग ४ (Part 4 of 10): MTF / MIS कॅल्क्युलेटर गणित"
+
 def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct, margin_pct):
     m_dec = margin_pct / 100.0
     leverage = round(1.0 / m_dec, 2) if m_dec > 0 else 1.0
@@ -258,6 +265,7 @@ def calculate_trade(broker, product, capital, entry, sl, t1, t2, days, risk_pct,
         "p1_profit": p1_profit, "p2_profit": p2_profit, "partial_total": partial_total
     }
 
+"भाग ५ (Part 5 of 10): टॅब १ — कॅल्क्युलेटर इंटरफेस"
 def render_tab1_calculator(df_stocks):
     col_b, col_p = st.columns(2)
     broker = col_b.selectbox("ब्रोकर निवडा", ["Dhan", "Zerodha"])
@@ -340,92 +348,9 @@ def render_tab1_calculator(df_stocks):
         "नवीन Trailing SL": [f"₹{active['breakeven']:,.2f}", f"₹{entry + 0.5 * risk_pts:,.2f}", f"₹{entry + risk_pts:,.2f}", f"₹{entry + 2 * risk_pts:,.2f}"],
     })
     st.dataframe(tsl_df, use_container_width=True, hide_index=True)
-def render_tab1_calculator(df_stocks):
-    col_b, col_p = st.columns(2)
-    broker = col_b.selectbox("ब्रोकर निवडा", ["Dhan", "Zerodha"])
-    product = col_p.selectbox("प्रॉडक्ट प्रकार", ["MTF Swing", "MIS Intraday"])
 
-    symbols = df_stocks["Symbol"].tolist()
-    default_idx = symbols.index("RELIANCE") if "RELIANCE" in symbols else 0
-    selected_sym = st.selectbox("🔍 Nifty 500 शेअर निवडा (टाईप करून शोधा)", symbols, index=default_idx)
-
-    stock_row = df_stocks[df_stocks["Symbol"] == selected_sym].to_dict("records").pop(0)
-    live_cmp = float(stock_row.get("Live_CMP", 0.0))
-
-    st.info(f"**{stock_row['Company']}** ({stock_row['Industry']}) | लाइव्ह भाव: **₹{live_cmp:,.2f}**")
-
-    c1, c2 = st.columns(2)
-    capital = c1.number_input("तुमचे भांडवल (₹)", min_value=1000.0, value=10000.0, step=1000.0)
-    risk_pct = c2.number_input("प्रति ट्रेड जोखीम (%)", min_value=0.1, max_value=20.0, value=2.0, step=0.5)
-
-    default_entry = live_cmp if live_cmp > 0 else 1300.0
-    c3, c4 = st.columns(2)
-    entry = c3.number_input("खरेदी किंमत Entry (₹)", min_value=1.0, value=float(default_entry), step=1.0)
-    sl = c4.number_input("स्टॉप लॉस SL (₹)", min_value=0.5, value=round(float(default_entry) * 0.97, 2), step=1.0)
-
-    c5, c6, c7 = st.columns(3)
-    t1 = c5.number_input("Target 1 (50% Book ₹)", min_value=1.0, value=round(float(default_entry) * 1.05, 2), step=1.0)
-    t2 = c6.number_input("Target 2 (Final ₹)", min_value=1.0, value=round(float(default_entry) * 1.10, 2), step=1.0)
-    days = c7.number_input("होल्डिंग दिवस", min_value=0, max_value=365, value=10 if product == "MTF Swing" else 0)
-
-    dhan_m = stock_row["MIS"] if product == "MIS Intraday" else stock_row["Dhan_MTF"]
-    zero_m = stock_row["MIS"] if product == "MIS Intraday" else stock_row["Zerodha_MTF"]
-
-    res_dhan = calculate_trade("Dhan", product, capital, entry, sl, t1, t2, days, risk_pct, dhan_m)
-    res_zero = calculate_trade("Zerodha", product, capital, entry, sl, t1, t2, days, risk_pct, zero_m)
-    active = res_dhan if broker == "Dhan" else res_zero
-
-    st.divider()
-    st.subheader(f"🎯 {broker} ({product}) निकाल")
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Safe Qty (२% रिस्क)", f"{active['safe_qty']} शेअर्स", f"Max Qty: {active['max_qty']}")
-    m2.metric("लीव्हरेज / मार्जिन", f"{active['leverage']}x", f"{dhan_m if broker=='Dhan' else zero_m}%")
-    m3.metric("तुमचे वापरलेले भांडवल", f"₹{active['margin_used']:,.2f}", f"खरेदी: ₹{active['trade_val']:,.2f}")
-
-    m4, m5, m6 = st.columns(3)
-    m4.metric("Target 2 निव्वळ नफा", f"₹{active['net_profit']:,.2f}", f"ROI: {active['roi']}%")
-    m5.metric("SL वर प्रत्यक्ष तोटा", f"₹{active['net_loss']:,.2f}", f"Breakeven: ₹{active['breakeven']:,.2f}")
-    m6.metric("एकूण कर व व्याज", f"₹{active['total_charges']:,.2f}", f"व्याज: ₹{active['interest']:,.2f}")
-
-    if product == "MTF Swing":
-        st.warning(f"🚨 **MTF Margin Call धोक्याची किंमत:** ₹{active['danger_price']:,.2f} (फंडिंग रक्कम: ₹{active['funded_amt']:,.2f})")
-
-    st.subheader("💰 ५०% अर्धा नफा बुकिंग प्लॅनर")
-    partial_df = pd.DataFrame({
-        "टप्पा (Stage)": ["टप्पा १: Target 1 (50% Book)", "टप्पा २: Target 2 (उरलेले 50%)", "एकूण एकत्रित निव्वळ नफा"],
-        "विक्री किंमत": [f"₹{t1:,.2f}", f"₹{t2:,.2f}", "-"],
-        "शेअर्स (Qty)": [f"{active['half_qty']} शेअर्स", f"{active['rem_qty']} शेअर्स", f"{active['safe_qty']} शेअर्स"],
-        "निव्वळ नफा": [f"₹{active['p1_profit']:,.2f}", f"₹{active['p2_profit']:,.2f}", f"₹{active['partial_total']:,.2f}"]
-    })
-    st.dataframe(partial_df, use_container_width=True, hide_index=True)
-
-    st.subheader("⚔️ Dhan विरुद्ध Zerodha थेट तुलना")
-    comp_df = pd.DataFrame({
-        "तपशील": ["मार्जिन %", "ब्रोकरेज", "MTF व्याज", "सरकारी कर व DP", "एकूण खर्च", "Target 2 निव्वळ नफा"],
-        "Dhan": [f"{dhan_m}%", f"₹{res_dhan['brokerage']:,.2f}", f"₹{res_dhan['interest']:,.2f}", f"₹{res_dhan['taxes']:,.2f}", f"₹{res_dhan['total_charges']:,.2f}", f"₹{res_dhan['net_profit']:,.2f}"],
-        "Zerodha": [f"{zero_m}%", f"₹{res_zero['brokerage']:,.2f}", f"₹{res_zero['interest']:,.2f}", f"₹{res_zero['taxes']:,.2f}", f"₹{res_zero['total_charges']:,.2f}", f"₹{res_zero['net_profit']:,.2f}"],
-    })
-    st.dataframe(comp_df, use_container_width=True, hide_index=True)
-
-    diff = round(res_dhan["net_profit"] - res_zero["net_profit"], 2)
-    if diff > 0:
-        st.success(f"✅ **Dhan** वर तुम्हाला **₹{diff:,.2f} जास्त निव्वळ नफा** उरतो!")
-    elif diff < 0:
-        st.success(f"✅ **Zerodha** वर तुम्हाला **₹{abs(diff):,.2f} जास्त निव्वळ नफा** उरतो!")
-
-    st.subheader("🛡️ Trailing Stop-Loss (TSL) प्लॅनर")
-    risk_pts = abs(entry - sl)
-    tsl_df = pd.DataFrame({
-        "टप्पा": ["1R (1:1)", "1.5R (1:1.5)", "2R (1:2)", "3R (1:3)"],
-        "Trigger किंमत": [f"₹{entry + risk_pts:,.2f}", f"₹{entry + 1.5 * risk_pts:,.2f}", f"₹{entry + 2 * risk_pts:,.2f}", f"₹{entry + 3 * risk_pts:,.2f}"],
-        "नवीन Trailing SL": [f"₹{active['breakeven']:,.2f}", f"₹{entry + 0.5 * risk_pts:,.2f}", f"₹{entry + risk_pts:,.2f}", f"₹{entry + 2 * risk_pts:,.2f}"],
-    })
-    st.dataframe(tsl_df, use_container_width=True, hide_index=True)
-
-
+"भाग ६ (Part 6 of 10): टॅब २ (ब्रेकआऊट रिपोर्ट्स) आणि टॅब ५ (५०० शेअर्स Live CMP)"
 def get_smart_col_config(df):
-    """रिपोर्टमधील किंमत आणि रकमेच्या कॉलम्सना आपोआप ₹ फॉरमॅट लावणे"""
     cfg = {}
     price_keywords = (
         "PRICE", "CMP", "TARGET", "SL", "ATH", "DMA", "HIGH", "LOW",
@@ -505,6 +430,194 @@ def render_tab2_and_tab3(tab2, tab3, df_stocks):
             }
         )
 
+"भाग ७ (Part 7 of 10): चार्ट्स आणि Excel स्कॅनर डेटा आणणारे मदतगार फंक्शन्स"
+@st.cache_data(ttl=900)
+def get_daily_date_folders():
+    service, root_id, err = get_gdrive_service()
+    if err:
+        return [], err
+    try:
+        q_daily = f"name='01_Daily_Reports' and '{root_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        daily_res = service.files().list(q=q_daily, fields="files(id)").execute().get("files", [])
+        if not daily_res:
+            return [], "Drive वर '01_Daily_Reports' फोल्डर सापडले नाही."
+        daily_id = next(iter(daily_res)).get("id")
+        q_dates = f"'{daily_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        folders = service.files().list(
+            q=q_dates, orderBy="createdTime desc", pageSize=15, fields="files(id, name)"
+        ).execute().get("files", [])
+        return folders, None
+    except Exception as e:
+        return [], f"तारीख फोल्डर वाचताना त्रुटी: {e}"
+
+
+def find_subfolder_id(service, parent_id, folder_name):
+    q = f"name='{folder_name}' and '{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    res = service.files().list(q=q, fields="files(id)").execute().get("files", [])
+    return next(iter(res)).get("id") if res else None
+
+
+@st.cache_data(ttl=900)
+def fetch_charts_and_excel(date_folder_id, mode):
+    service, _, err = get_gdrive_service()
+    if err:
+        return pd.DataFrame(), {}, err
+
+    try:
+        if mode == "breakout":
+            scan_dir_id = find_subfolder_id(service, date_folder_id, "Full_Market_Scan")
+            excel_parent = scan_dir_id or date_folder_id
+            excel_prefix = "Breakout_Scanner"
+            chart_dir_id = find_subfolder_id(service, scan_dir_id, "Charts") if scan_dir_id else None
+        else:
+            excel_parent = date_folder_id
+            excel_prefix = "Analyze_Trending_charts"
+            chart_dir_id = find_subfolder_id(service, date_folder_id, "Trendline_Charts")
+
+        q_xl = f"'{excel_parent}' in parents and name contains '{excel_prefix}' and name contains '.xlsx' and trashed=false"
+        xl_files = service.files().list(
+            q=q_xl, orderBy="createdTime desc", pageSize=5, fields="files(id, name)"
+        ).execute().get("files", [])
+
+        df_excel = pd.DataFrame()
+        if xl_files:
+            latest_xl = next(iter(xl_files))
+            req = service.files().get_media(fileId=latest_xl.get("id"))
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, req)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            fh.seek(0)
+            xl_obj = pd.ExcelFile(fh)
+            df_excel = pd.read_excel(xl_obj, sheet_name=next(iter(xl_obj.sheet_names)))
+
+        chart_map = {}
+        if chart_dir_id:
+            q_png = f"'{chart_dir_id}' in parents and name contains '.png' and trashed=false"
+            png_files = service.files().list(
+                q=q_png, orderBy="createdTime desc", pageSize=250, fields="files(id, name)"
+            ).execute().get("files", [])
+
+            for pf in png_files:
+                fname = pf.get("name", "")
+                sym = fname.split("_").pop(0).strip().upper()
+                if sym and sym not in chart_map:
+                    chart_map[sym] = {"id": pf.get("id"), "name": fname}
+
+        return df_excel, chart_map, None
+    except Exception as e:
+        return pd.DataFrame(), {}, f"चार्ट डेटा वाचताना त्रुटी: {e}"
+
+
+@st.cache_data(ttl=1800)
+def download_chart_bytes(file_id):
+    service, _, err = get_gdrive_service()
+    if err:
+        return None
+    req = service.files().get_media(fileId=file_id)
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, req)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    return fh.getvalue()
+
+"भाग ८ (Part 8 of 10): टॅब ३ आणि ४ — ब्रेकआऊट चार्ट्स व ट्रेंडलाईन चार्ट्स इंटरफेस"
+def render_chart_scanner_tab(tab_obj, mode, tab_heading):
+    with tab_obj:
+        st.subheader(tab_heading)
+        folders, f_err = get_daily_date_folders()
+        if f_err:
+            st.info(f_err)
+            return
+        if not folders:
+            st.warning("अजून कोणतेही तारीख फोल्डर सापडले नाही.")
+            return
+
+        folder_map = {f.get("name"): f.get("id") for f in folders}
+        c_date, c_view = st.columns((1, 2))
+        sel_date = c_date.selectbox("📅 तारीख निवडा (Date)", list(folder_map.keys()), key=f"dt_{mode}")
+        view_mode = c_view.radio(
+            "दृश्य निवडा (View Mode)",
+            ["🔍 एक शेअर निवडा (Single Chart + Data)", "🖼️ सर्व चार्ट्स गॅलरी (All Charts Grid)"],
+            horizontal=True,
+            key=f"vm_{mode}"
+        )
+
+        df_excel, chart_map, c_err = fetch_charts_and_excel(folder_map[sel_date], mode)
+        if c_err:
+            st.error(c_err)
+            return
+
+        excel_syms = []
+        sym_col = None
+        for col in df_excel.columns:
+            if str(col).strip().upper() in ("SYMBOL", "STOCK", "TICKER"):
+                sym_col = col
+                for s in df_excel[col].dropna().unique():
+                    s_clean = str(s).strip().upper()
+                    if s_clean and "STOCK" not in s_clean and "TOTAL" not in s_clean and "PORTFOLIO" not in s_clean:
+                        excel_syms.append(s_clean)
+                break
+
+        chart_syms = sorted(list(chart_map.keys()))
+        only_data_syms = sorted([s for s in set(excel_syms) if s not in chart_map])
+        all_syms = chart_syms + only_data_syms
+
+        if not all_syms and df_excel.empty:
+            st.warning(f"📅 **{sel_date}** या तारखेसाठी चार्ट्स किंवा रिपोर्ट उपलब्ध नाहीत.")
+            return
+
+        if view_mode.startswith("🔍"):
+            if all_syms:
+                sel_sym = st.selectbox(
+                    f"📈 शेअर निवडा ({len(chart_syms)} चार्ट्स उपलब्ध | एकूण {len(all_syms)} शेअर्स)",
+                    all_syms,
+                    key=f"sym_{mode}"
+                )
+
+                if not df_excel.empty and sym_col:
+                    match_rows = df_excel[df_excel[sym_col].astype(str).str.strip().str.upper() == sel_sym]
+                    if not match_rows.empty:
+                        st.markdown(f"**📋 {sel_sym} — स्कॅनर विश्लेषण तपशील:**")
+                        st.dataframe(
+                            match_rows,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config=get_smart_col_config(match_rows)
+                        )
+
+                if sel_sym in chart_map:
+                    img_bytes = download_chart_bytes(chart_map[sel_sym]["id"])
+                    if img_bytes:
+                        st.image(img_bytes, caption=f"{sel_sym} — {chart_map[sel_sym]['name']}", use_container_width=True)
+                else:
+                    st.info(f"ℹ️ **{sel_sym}** साठी PNG चार्ट इमेज उपलब्ध नाही.")
+        else:
+            if not chart_map:
+                st.info("या तारखेसाठी PNG चार्ट्स सापडले नाहीत.")
+            else:
+                st.success(f"एकूण **{len(chart_map)}** ताजे चार्ट्स लोड झाले आहेत:")
+                grid_cols = st.columns(2)
+                for idx, (sym, info) in enumerate(sorted(chart_map.items())):
+                    img_bytes = download_chart_bytes(info["id"])
+                    if img_bytes:
+                        with grid_cols[idx % 2]:
+                            with st.container(border=True):
+                                st.image(img_bytes, caption=f"{sym} ({info['name']})", use_container_width=True)
+
+        if not df_excel.empty:
+            with st.expander(f"📊 संपूर्ण Excel डेटा तक्ता पहा ({len(df_excel)} ओळी)", expanded=False):
+                st.dataframe(
+                    df_excel,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=500,
+                    column_config=get_smart_col_config(df_excel)
+                )
+
+"भाग ९ (Part 9 of 10): ट्रेड जर्नलचे ग्राफ्स आणि सारांश तक्ते तयार करणारे फंक्शन्स"
 
 def add_total_row(df_in, label_col):
     df_clean = df_in[df_in[label_col].astype(str).str.upper() != "TOTAL"].copy()
@@ -524,12 +637,103 @@ def add_total_row(df_in, label_col):
     }])
     return pd.concat([df_clean, tot_row], ignore_index=True)
 
+
+def build_dynamic_summary(df_sub, group_col, display_label):
+    rows = []
+    for key, grp in df_sub.groupby(group_col):
+        tot = len(grp)
+        w = len(grp[grp["STATUS"] == "WIN"])
+        l = len(grp[grp["STATUS"] == "LOSS"])
+        wr = round((w / tot) * 100, 1) if tot > 0 else 0.0
+        rows.append({
+            display_label: key,
+            "Closed Trades": tot,
+            "Wins": w,
+            "Losses": l,
+            "Win Rate %": wr,
+            "Gross P&L (₹)": round(grp["GROSS_PNL"].sum(), 2),
+            "Charges & Tax (₹)": round(grp["CHARGES_TAX"].sum(), 2),
+            "Net P&L (₹)": round(grp["NET_PNL"].sum(), 2),
+        })
+    return add_total_row(pd.DataFrame(rows), display_label)
+
+
+def render_journal_charts(closed_df, wins, losses):
+    closed_df = closed_df.copy()
+    closed_df["EXIT_DT"] = pd.to_datetime(closed_df["EXIT_DATE"], errors="coerce")
+    closed_df = closed_df.sort_values(by=["EXIT_DT", "TRADE_ID"]).reset_index(drop=True)
+    closed_df["Trade_No"] = range(1, len(closed_df) + 1)
+    closed_df["Cumulative_PnL"] = closed_df["NET_PNL"].cumsum().round(2)
+
+    g1, g2 = st.columns(2)
+    with g1:
+        fig_eq = px.area(
+            closed_df, x="Trade_No", y="Cumulative_PnL",
+            hover_data=["SYMBOL", "ACCOUNT_HOLDER", "BROKER", "SEGMENT", "NET_PNL"],
+            title="📈 एकूण भांडवल वाढ आलेख (Equity Curve ₹)",
+            color_discrete_sequence=["#00A86B"]
+        )
+        fig_eq.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
+        st.plotly_chart(fig_eq, use_container_width=True)
+
+    with g2:
+        pie_df = pd.DataFrame({"Result": ["Wins", "Losses"], "Count": [wins, losses]})
+        fig_pie = px.pie(
+            pie_df, values="Count", names="Result", hole=0.55,
+            title="🎯 Win vs Loss प्रमाण (Trade Sentiment)",
+            color="Result", color_discrete_map={"Wins": "#00A86B", "Losses": "#E74C3C"}
+        )
+        fig_pie.update_traces(textinfo="value+percent")
+        fig_pie.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    valid_m = closed_df.dropna(subset=["EXIT_DT"]).copy()
+    if not valid_m.empty:
+        valid_m["YearMonth"] = valid_m["EXIT_DT"].dt.to_period("M")
+        m_grp = valid_m.groupby("YearMonth", as_index=False)["NET_PNL"].sum().sort_values("YearMonth")
+        m_grp["Month"] = m_grp["YearMonth"].dt.strftime("%b-%Y")
+        m_grp["Color"] = m_grp["NET_PNL"].apply(lambda v: "Profit" if v >= 0 else "Loss")
+        m_grp["Label"] = m_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}")
+        fig_m = px.bar(
+            m_grp, x="Month", y="NET_PNL", text="Label", color="Color",
+            title="📅 महिनानिहाय नफा-तोटा आलेख (Monthly Net P&L ₹)",
+            color_discrete_map={"Profit": "#00A86B", "Loss": "#E74C3C"}
+        )
+        fig_m.update_traces(textposition="outside")
+        fig_m.update_layout(height=360, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
+        st.plotly_chart(fig_m, use_container_width=True)
+
+    g3, g4 = st.columns(2)
+    with g3:
+        acc_grp = closed_df.groupby("ACCOUNT_HOLDER", as_index=False)["NET_PNL"].sum()
+        acc_grp["Label"] = acc_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}")
+        fig_acc = px.bar(
+            acc_grp, x="ACCOUNT_HOLDER", y="NET_PNL", text="Label",
+            title="👥 खातेधारकानुसार निव्वळ नफा (₹)",
+            color="NET_PNL", color_continuous_scale=["#E74C3C", "#2ECC71"]
+        )
+        fig_acc.update_traces(textposition="outside")
+        fig_acc.update_layout(height=350, showlegend=False, coloraxis_showscale=False, margin=dict(l=10, r=10, t=45, b=10))
+        st.plotly_chart(fig_acc, use_container_width=True)
+
+    with g4:
+        brk_grp = closed_df.groupby("BROKER", as_index=False)["NET_PNL"].sum()
+        brk_grp["Label"] = brk_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}")
+        fig_brk = px.bar(
+            brk_grp, x="BROKER", y="NET_PNL", text="Label",
+            title="🏦 ब्रोकरनुसार निव्वळ नफा (₹)",
+            color="BROKER"
+        )
+        fig_brk.update_traces(textposition="outside")
+        fig_brk.update_layout(height=350, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
+        st.plotly_chart(fig_brk, use_container_width=True)
+
+"भाग १० (Part 10 of 10): पासवर्ड-सुरक्षित ट्रेड जर्नल आणि मुख्य ॲप"
 def render_tab4_journal(tab4):
     with tab4:
         j_col1, j_col2 = st.columns((5, 1))
         j_col1.subheader("🏆 एकत्रित ट्रेड जर्नल व इंटरॲक्टिव्ह डॅशबोर्ड")
 
-        # खाजगी P&L डेटा सुरक्षित ठेवण्यासाठी पासवर्ड लॉक
         app_pin = st.secrets.get("JOURNAL_PASSWORD", "1234")
         if "journal_unlocked" not in st.session_state:
             st.session_state["journal_unlocked"] = False
@@ -545,12 +749,11 @@ def render_tab4_journal(tab4):
                     st.error("❌ चुकीचा पासवर्ड! कृपया पुन्हा प्रयत्न करा.")
             return
 
-        if j_col2.button("🔒 लॉक करा", key="lock_journal_btn"):
+        if j_col2.button("🔒 लॉक करा", key="lock_journal_btn", use_container_width=True):
             st.session_state["journal_unlocked"] = False
             st.rerun()
 
         sheets_data, j_err = fetch_master_trade_journal()
-        
         if j_err:
             st.info(j_err)
             return
@@ -558,7 +761,6 @@ def render_tab4_journal(tab4):
         if sheets_data and "All_Trades_Journal" in sheets_data:
             all_df = sheets_data["All_Trades_Journal"].copy()
 
-            # तिहेरी फिल्टर: खातेधारक, ब्रोकर आणि सेगमेंट
             f1, f2, f3 = st.columns(3)
             holders = ["सर्व (All)"] + sorted(all_df["ACCOUNT_HOLDER"].dropna().unique().tolist())
             brokers = ["सर्व (All)"] + sorted(all_df["BROKER"].dropna().unique().tolist())
@@ -593,132 +795,25 @@ def render_tab4_journal(tab4):
             k4.metric("चालू ट्रेड्स (OPEN)", f"{open_cnt}")
 
             if not closed_df.empty:
-                closed_df["EXIT_DT"] = pd.to_datetime(closed_df["EXIT_DATE"], errors="coerce")
-                closed_df = closed_df.sort_values(by=["EXIT_DT", "TRADE_ID"]).reset_index(drop=True)
-                closed_df["Trade_No"] = range(1, len(closed_df) + 1)
-                closed_df["Cumulative_PnL"] = closed_df["NET_PNL"].cumsum().round(2)
+                render_journal_charts(closed_df, wins, losses)
 
-                # ओळ १: Equity Curve आणि Win/Loss प्रमाण
-                g1, g2 = st.columns(2)
-                with g1:
-                    fig_eq = px.area(
-                        closed_df, x="Trade_No", y="Cumulative_PnL",
-                        hover_data=["SYMBOL", "ACCOUNT_HOLDER", "BROKER", "SEGMENT", "NET_PNL"],
-                        title="📈 एकूण भांडवल वाढ आलेख (Equity Curve ₹)",
-                        color_discrete_sequence=["#00A86B"]
-                    )
-                    fig_eq.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
-                    st.plotly_chart(fig_eq, use_container_width=True)
+                summary_col_cfg = {
+                    "Win Rate %": st.column_config.NumberColumn(format="%.1f%%"),
+                    "Gross P&L (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                    "Charges & Tax (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                    "Net P&L (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                }
 
-                with g2:
-                    pie_df = pd.DataFrame({"Result": ["Wins", "Losses"], "Count": [wins, losses]})
-                    fig_pie = px.pie(
-                        pie_df, values="Count", names="Result", hole=0.55,
-                        title="🎯 Win vs Loss प्रमाण (Trade Sentiment)",
-                        color="Result", color_discrete_map={"Wins": "#00A86B", "Losses": "#E74C3C"}
-                    )
-                    fig_pie.update_traces(textinfo="value+percent")
-                    fig_pie.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
-                    st.plotly_chart(fig_pie, use_container_width=True)
-
-                # ओळ २: महिनानिहाय नफा-तोटा आलेख (Monthly P&L Chart)
-                valid_m = closed_df.dropna(subset=["EXIT_DT"]).copy()
-                if not valid_m.empty:
-                    valid_m["YearMonth"] = valid_m["EXIT_DT"].dt.to_period("M")
-                    m_grp = valid_m.groupby("YearMonth", as_index=False)["NET_PNL"].sum().sort_values("YearMonth")
-                    m_grp["Month"] = m_grp["YearMonth"].dt.strftime("%b-%Y")
-                    m_grp["Color"] = m_grp["NET_PNL"].apply(lambda v: "Profit" if v >= 0 else "Loss")
-                    m_grp["Label"] = m_grp["NET_PNL"].apply(
-                        lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}"
-                    )
-                    fig_m = px.bar(
-                        m_grp, x="Month", y="NET_PNL", text="Label", color="Color",
-                        title="📅 महिनानिहाय नफा-तोटा आलेख (Monthly Net P&L ₹)",
-                        color_discrete_map={"Profit": "#00A86B", "Loss": "#E74C3C"}
-                    )
-                    fig_m.update_traces(textposition="outside")
-                    fig_m.update_layout(height=360, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
-                    st.plotly_chart(fig_m, use_container_width=True)
-
-                # ओळ ३: खातेधारक व ब्रोकर तुलना बार चार्ट्स
-                g3, g4 = st.columns(2)
-                with g3:
-                    acc_grp = closed_df.groupby("ACCOUNT_HOLDER", as_index=False)["NET_PNL"].sum()
-                    acc_grp["Label"] = acc_grp["NET_PNL"].apply(
-                        lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}"
-                    )
-                    fig_acc = px.bar(
-                        acc_grp, x="ACCOUNT_HOLDER", y="NET_PNL", text="Label",
-                        title="👥 खातेधारकानुसार निव्वळ नफा (₹)",
-                        color="NET_PNL", color_continuous_scale=["#E74C3C", "#2ECC71"]
-                    )
-                    fig_acc.update_traces(textposition="outside")
-                    fig_acc.update_layout(height=350, showlegend=False, coloraxis_showscale=False, margin=dict(l=10, r=10, t=45, b=10))
-                    st.plotly_chart(fig_acc, use_container_width=True)
-
-                with g4:
-                    brk_grp = closed_df.groupby("BROKER", as_index=False)["NET_PNL"].sum()
-                    brk_grp["Label"] = brk_grp["NET_PNL"].apply(
-                        lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}"
-                    )
-                    fig_brk = px.bar(
-                        brk_grp, x="BROKER", y="NET_PNL", text="Label",
-                        title="🏦 ब्रोकरनुसार निव्वळ नफा (₹)",
-                        color="BROKER"
-                    )
-                    fig_brk.update_traces(textposition="outside")
-                    fig_brk.update_layout(height=350, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
-                    st.plotly_chart(fig_brk, use_container_width=True)
-
-            def build_dynamic_summary(df_sub, group_col, display_label):
-                rows = []
-                for key, grp in df_sub.groupby(group_col):
-                    tot = len(grp)
-                    w = len(grp[grp["STATUS"] == "WIN"])
-                    l = len(grp[grp["STATUS"] == "LOSS"])
-                    wr = round((w / tot) * 100, 1) if tot > 0 else 0.0
-                    rows.append({
-                        display_label: key,
-                        "Closed Trades": tot,
-                        "Wins": w,
-                        "Losses": l,
-                        "Win Rate %": wr,
-                        "Gross P&L (₹)": round(grp["GROSS_PNL"].sum(), 2),
-                        "Charges & Tax (₹)": round(grp["CHARGES_TAX"].sum(), 2),
-                        "Net P&L (₹)": round(grp["NET_PNL"].sum(), 2),
-                    })
-                return add_total_row(pd.DataFrame(rows), display_label)
-
-            summary_col_cfg = {
-                "Win Rate %": st.column_config.NumberColumn(format="%.1f%%"),
-                "Gross P&L (₹)": st.column_config.NumberColumn(format="₹%.2f"),
-                "Charges & Tax (₹)": st.column_config.NumberColumn(format="₹%.2f"),
-                "Net P&L (₹)": st.column_config.NumberColumn(format="₹%.2f"),
-            }
-
-            if not closed_df.empty:
-                # Intraday विरुद्ध Swing तुलना तक्ता
                 st.subheader("⚡ Intraday विरुद्ध Swing कामगिरी तुलना (TOTAL सह)")
-                st.dataframe(
-                    build_dynamic_summary(closed_df, "SEGMENT", "Segment"),
-                    use_container_width=True, hide_index=True, column_config=summary_col_cfg
-                )
+                st.dataframe(build_dynamic_summary(closed_df, "SEGMENT", "Segment"), use_container_width=True, hide_index=True, column_config=summary_col_cfg)
 
-                # टॉप ५ नफा व टॉप ५ तोटा देणारे शेअर्स (Standardized Symbol + Company Name सह)
                 sym_rows = []
                 for sym, grp in closed_df.groupby("SYMBOL"):
                     tot = len(grp)
                     w = len(grp[grp["STATUS"] == "WIN"])
                     wr = round((w / tot) * 100, 1) if tot > 0 else 0.0
-                    comp_name = grp["COMPANY_NAME"].dropna().iloc[0] if "COMPANY_NAME" in grp.columns and not grp["COMPANY_NAME"].dropna().empty else sym
-                    sym_rows.append({
-                        "Symbol": sym,
-                        "Company": comp_name,
-                        "Trades": tot,
-                        "Win Rate %": wr,
-                        "Net P&L (₹)": round(grp["NET_PNL"].sum(), 2)
-                    })
-
+                    comp_name = grp["COMPANY_NAME"].dropna().iloc.__getitem__(0) if "COMPANY_NAME" in grp.columns and not grp["COMPANY_NAME"].dropna().empty else sym
+                    sym_rows.append({"Symbol": sym, "Company": comp_name, "Trades": tot, "Win Rate %": wr, "Net P&L (₹)": round(grp["NET_PNL"].sum(), 2)})
                 sym_df = pd.DataFrame(sym_rows)
                 top_winners = sym_df[sym_df["Net P&L (₹)"] > 0].sort_values(by="Net P&L (₹)", ascending=False).head(5)
                 top_losers = sym_df[sym_df["Net P&L (₹)"] < 0].sort_values(by="Net P&L (₹)", ascending=True).head(5)
@@ -736,35 +831,26 @@ def render_tab4_journal(tab4):
                 with t_win_col:
                     st.markdown("**🟢 टॉप ५ नफा देणारे शेअर्स (Top 5 Winners)**")
                     if not top_winners.empty:
-                        win_h = (len(top_winners) + 1) * 35 + 5
-                        st.dataframe(top_winners, use_container_width=True, hide_index=True, height=win_h, column_config=stock_col_cfg)
+                        st.dataframe(top_winners, use_container_width=True, hide_index=True, height=(len(top_winners) + 1) * 35 + 5, column_config=stock_col_cfg)
                     else:
                         st.info("नफा झालेले शेअर्स नाहीत.")
 
                 with t_loss_col:
                     st.markdown("**🔴 टॉप ५ तोटा देणारे शेअर्स (Top 5 Losers)**")
                     if not top_losers.empty:
-                        loss_h = (len(top_losers) + 1) * 35 + 5
-                        st.dataframe(top_losers, use_container_width=True, hide_index=True, height=loss_h, column_config=stock_col_cfg)
+                        st.dataframe(top_losers, use_container_width=True, hide_index=True, height=(len(top_losers) + 1) * 35 + 5, column_config=stock_col_cfg)
                     else:
                         st.info("तोटा झालेले शेअर्स नाहीत.")
 
-
                 st.subheader("👥 खातेधारकानुसार सारांश (TOTAL सह)")
-                st.dataframe(
-                    build_dynamic_summary(closed_df, "ACCOUNT_HOLDER", "Account Holder"),
-                    use_container_width=True, hide_index=True, column_config=summary_col_cfg
-                )
+                st.dataframe(build_dynamic_summary(closed_df, "ACCOUNT_HOLDER", "Account Holder"), use_container_width=True, hide_index=True, column_config=summary_col_cfg)
 
                 st.subheader("🏦 ब्रोकरनुसार कामगिरी (TOTAL सह)")
-                st.dataframe(
-                    build_dynamic_summary(closed_df, "BROKER", "Broker"),
-                    use_container_width=True, hide_index=True, column_config=summary_col_cfg
-                )
+                st.dataframe(build_dynamic_summary(closed_df, "BROKER", "Broker"), use_container_width=True, hide_index=True, column_config=summary_col_cfg)
 
             st.subheader("📋 सर्व ट्रेड्सची यादी (Detailed Trades)")
             st.dataframe(
-                filtered_df.drop(columns=["EXIT_DT"], errors="ignore"),
+                filtered_df,
                 use_container_width=True,
                 hide_index=True,
                 height=550,
@@ -778,286 +864,6 @@ def render_tab4_journal(tab4):
                     "RETURN_%": st.column_config.NumberColumn("Return %", format="%.2f%%"),
                 }
             )
-@st.cache_data(ttl=900)
-def get_daily_date_folders():
-    service, root_id, err = get_gdrive_service()
-    if err:
-        return [], err
-    try:
-        q_daily = f"name='01_Daily_Reports' and '{root_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        daily_res = service.files().list(q=q_daily, fields="files(id)").execute().get("files", [])
-        if not daily_res:
-            return [], "Drive वर '01_Daily_Reports' फोल्डर सापडले नाही."
-        daily_id = next(iter(daily_res)).get("id")
-        q_dates = f"'{daily_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        folders = service.files().list(
-            q=q_dates, orderBy="createdTime desc", pageSize=15, fields="files(id, name)"
-        ).execute().get("files", [])
-        return folders, None
-    except Exception as e:
-        return [], f"तारीख फोल्डर वाचताना त्रुटी: {e}"
-
-
-def find_subfolder_id(service, parent_id, folder_name):
-    q = f"name='{folder_name}' and '{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
-    res = service.files().list(q=q, fields="files(id)").execute().get("files", [])
-    return next(iter(res)).get("id") if res else None
-
-
-@st.cache_data(ttl=900)
-def fetch_charts_and_excel(date_folder_id, mode):
-    """mode = 'breakout' किंवा 'trendline' साठी ताजी Excel फाईल आणि PNG चार्ट्स आणणे"""
-    service, _, err = get_gdrive_service()
-    if err:
-        return pd.DataFrame(), {}, err
-
-    try:
-        if mode == "breakout":
-            scan_dir_id = find_subfolder_id(service, date_folder_id, "Full_Market_Scan")
-            excel_parent = scan_dir_id or date_folder_id
-            excel_prefix = "Breakout_Scanner"
-            chart_dir_id = find_subfolder_id(service, scan_dir_id, "Charts") if scan_dir_id else None
-        else:
-            excel_parent = date_folder_id
-            excel_prefix = "Analyze_Trending_charts"
-            chart_dir_id = find_subfolder_id(service, date_folder_id, "Trendline_Charts")
-
-        # १. सर्वात ताजी Excel फाईल डाउनलोड करणे
-        q_xl = f"'{excel_parent}' in parents and name contains '{excel_prefix}' and name contains '.xlsx' and trashed=false"
-        xl_files = service.files().list(
-            q=q_xl, orderBy="createdTime desc", pageSize=5, fields="files(id, name)"
-        ).execute().get("files", [])
-
-        df_excel = pd.DataFrame()
-        if xl_files:
-            latest_xl = next(iter(xl_files))
-            req = service.files().get_media(fileId=latest_xl.get("id"))
-            fh = io.BytesIO()
-            downloader = MediaIoBaseDownload(fh, req)
-            done = False
-            while not done:
-                _, done = downloader.next_chunk()
-            fh.seek(0)
-            xl_obj = pd.ExcelFile(fh)
-            df_excel = pd.read_excel(xl_obj, sheet_name=next(iter(xl_obj.sheet_names)))
-
-        # २. PNG चार्ट्सची यादी (प्रत्येक शेअरचा सर्वात ताजा चार्ट)
-        chart_map = {}
-        if chart_dir_id:
-            q_png = f"'{chart_dir_id}' in parents and name contains '.png' and trashed=false"
-            png_files = service.files().list(
-                q=q_png, orderBy="createdTime desc", pageSize=250, fields="files(id, name)"
-            ).execute().get("files", [])
-
-            for pf in png_files:
-                fname = pf.get("name", "")
-                sym = fname.split("_").pop(0).strip().upper()
-                if sym and sym not in chart_map:
-                    chart_map[sym] = {"id": pf.get("id"), "name": fname}
-
-        return df_excel, chart_map, None
-    except Exception as e:
-        return pd.DataFrame(), {}, f"चार्ट डेटा वाचताना त्रुटी: {e}"
-
-
-@st.cache_data(ttl=1800)
-def download_chart_bytes(file_id):
-    service, _, err = get_gdrive_service()
-    if err:
-        return None
-    req = service.files().get_media(fileId=file_id)
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, req)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    return fh.getvalue()
-
-def render_chart_scanner_tab(tab_obj, mode, tab_heading):
-    with tab_obj:
-        h_col1, h_col2 = st.columns((4, 1))
-        h_col1.subheader(tab_heading)
-        if h_col2.button("🔄 रिफ्रेश करा", key=f"ref_{mode}"):
-            st.cache_data.clear()
-            st.rerun()
-
-        folders, f_err = get_daily_date_folders()
-        if f_err:
-            st.info(f_err)
-            return
-        if not folders:
-            st.warning("अजून कोणतेही तारीख फोल्डर सापडले नाही.")
-            return
-
-        folder_map = {f.get("name"): f.get("id") for f in folders}
-        c_date, c_view = st.columns([1, 2])
-        sel_date = c_date.selectbox("📅 तारीख निवडा (Date)", list(folder_map.keys()), key=f"dt_{mode}")
-        view_mode = c_view.radio(
-            "दृश्य निवडा (View Mode)",
-            ["🔍 एक शेअर निवडा (Single Chart + Data)", "🖼️ सर्व चार्ट्स गॅलरी (All Charts Grid)"],
-            horizontal=True,
-            key=f"vm_{mode}"
-        )
-
-        df_excel, chart_map, c_err = fetch_charts_and_excel(folder_map[sel_date], mode)
-        if c_err:
-            st.error(c_err)
-            return
-
-        # Excel मधील वैध सिम्बॉल्स काढणे (TOTAL / 25 STOCKS सारख्या ओळी वगळून)
-        excel_syms = []
-        sym_col = None
-        for col in df_excel.columns:
-            if str(col).strip().upper() in ("SYMBOL", "STOCK", "TICKER"):
-                sym_col = col
-                for s in df_excel[col].dropna().unique():
-                    s_clean = str(s).strip().upper()
-                    if s_clean and "STOCK" not in s_clean and "TOTAL" not in s_clean and "PORTFOLIO" not in s_clean:
-                        excel_syms.append(s_clean)
-                break
-
-        # ज्या शेअर्सचे PNG चार्ट्स उपलब्ध आहेत ते सर्वात वरती ठेवणे
-        chart_syms = sorted(list(chart_map.keys()))
-        only_data_syms = sorted([s for s in set(excel_syms) if s not in chart_map])
-        all_syms = chart_syms + only_data_syms
-
-        if not all_syms and df_excel.empty:
-            st.warning(f"📅 **{sel_date}** या तारखेसाठी चार्ट्स किंवा रिपोर्ट उपलब्ध नाहीत.")
-            return
-
-        if view_mode.startswith("🔍"):
-            if all_syms:
-                sel_sym = st.selectbox(
-                    f"📈 शेअर निवडा ({len(chart_syms)} चार्ट्स उपलब्ध | एकूण {len(all_syms)} शेअर्स)",
-                    all_syms,
-                    key=f"sym_{mode}"
-                )
-
-                # निवडलेल्या शेअरची Excel मधील माहिती वर दाखवणे
-                if not df_excel.empty and sym_col:
-                    match_rows = df_excel[df_excel[sym_col].astype(str).str.strip().str.upper() == sel_sym]
-                    if not match_rows.empty:
-                        st.markdown(f"**📋 {sel_sym} — स्कॅनर विश्लेषण तपशील:**")
-                        st.dataframe(
-                            match_rows,
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config=get_smart_col_config(match_rows)
-                        )
-
-                # निवडलेल्या शेअरचा चार्ट दाखवणे
-                if sel_sym in chart_map:
-                    img_bytes = download_chart_bytes(chart_map[sel_sym]["id"])
-                    if img_bytes:
-                        st.image(img_bytes, caption=f"{sel_sym} — {chart_map[sel_sym]['name']}", use_container_width=True)
-                else:
-                    st.info(f"ℹ️ **{sel_sym}** साठी PNG चार्ट इमेज उपलब्ध नाही (वरचे पहिले {len(chart_syms)} शेअर्स निवडा).")
-        else:
-            if not chart_map:
-                st.info("या तारखेसाठी PNG चार्ट्स सापडले नाहीत.")
-            else:
-                st.success(f"एकूण **{len(chart_map)}** ताजे चार्ट्स लोड झाले आहेत:")
-                grid_cols = st.columns(2)
-                for idx, (sym, info) in enumerate(sorted(chart_map.items())):
-                    img_bytes = download_chart_bytes(info["id"])
-                    if img_bytes:
-                        with grid_cols[idx % 2]:
-                            with st.container(border=True):
-                                st.image(img_bytes, caption=f"{sym} ({info['name']})", use_container_width=True)
-
-        # तळाशी पूर्ण Excel तक्ता
-        if not df_excel.empty:
-            with st.expander(f"📊 संपूर्ण Excel डेटा तक्ता पहा ({len(df_excel)} ओळी)", expanded=False):
-                st.dataframe(
-                    df_excel,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=500,
-                    column_config=get_smart_col_config(df_excel)
-                )
-
-def render_tab1_calculator(df_stocks):
-    col_b, col_p = st.columns(2)
-    broker = col_b.selectbox("ब्रोकर निवडा", ["Dhan", "Zerodha"])
-    product = col_p.selectbox("प्रॉडक्ट प्रकार", ["MTF Swing", "MIS Intraday"])
-
-    symbols = df_stocks["Symbol"].tolist()
-    default_idx = symbols.index("RELIANCE") if "RELIANCE" in symbols else 0
-    selected_sym = st.selectbox("🔍 Nifty 500 शेअर निवडा (टाईप करून शोधा)", symbols, index=default_idx)
-
-    stock_row = df_stocks[df_stocks["Symbol"] == selected_sym].to_dict("records").pop(0)
-    live_cmp = float(stock_row.get("Live_CMP", 0.0))
-
-    st.info(f"**{stock_row['Company']}** ({stock_row['Industry']}) | लाइव्ह भाव: **₹{live_cmp:,.2f}**")
-
-    c1, c2 = st.columns(2)
-    capital = c1.number_input("तुमचे भांडवल (₹)", min_value=1000.0, value=10000.0, step=1000.0)
-    risk_pct = c2.number_input("प्रति ट्रेड जोखीम (%)", min_value=0.1, max_value=20.0, value=2.0, step=0.5)
-
-    default_entry = live_cmp if live_cmp > 0 else 1300.0
-    c3, c4 = st.columns(2)
-    entry = c3.number_input("खरेदी किंमत Entry (₹)", min_value=1.0, value=float(default_entry), step=1.0)
-    sl = c4.number_input("स्टॉप लॉस SL (₹)", min_value=0.5, value=round(float(default_entry) * 0.97, 2), step=1.0)
-
-    c5, c6, c7 = st.columns(3)
-    t1 = c5.number_input("Target 1 (50% Book ₹)", min_value=1.0, value=round(float(default_entry) * 1.05, 2), step=1.0)
-    t2 = c6.number_input("Target 2 (Final ₹)", min_value=1.0, value=round(float(default_entry) * 1.10, 2), step=1.0)
-    days = c7.number_input("होल्डिंग दिवस", min_value=0, max_value=365, value=10 if product == "MTF Swing" else 0)
-
-    dhan_m = stock_row["MIS"] if product == "MIS Intraday" else stock_row["Dhan_MTF"]
-    zero_m = stock_row["MIS"] if product == "MIS Intraday" else stock_row["Zerodha_MTF"]
-
-    res_dhan = calculate_trade("Dhan", product, capital, entry, sl, t1, t2, days, risk_pct, dhan_m)
-    res_zero = calculate_trade("Zerodha", product, capital, entry, sl, t1, t2, days, risk_pct, zero_m)
-    active = res_dhan if broker == "Dhan" else res_zero
-
-    st.divider()
-    st.subheader(f"🎯 {broker} ({product}) निकाल")
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Safe Qty (२% रिस्क)", f"{active['safe_qty']} शेअर्स", f"Max Qty: {active['max_qty']}")
-    m2.metric("लीव्हरेज / मार्जिन", f"{active['leverage']}x", f"{dhan_m if broker=='Dhan' else zero_m}%")
-    m3.metric("तुमचे वापरलेले भांडवल", f"₹{active['margin_used']:,.2f}", f"खरेदी: ₹{active['trade_val']:,.2f}")
-
-    m4, m5, m6 = st.columns(3)
-    m4.metric("Target 2 निव्वळ नफा", f"₹{active['net_profit']:,.2f}", f"ROI: {active['roi']}%")
-    m5.metric("SL वर प्रत्यक्ष तोटा", f"₹{active['net_loss']:,.2f}", f"Breakeven: ₹{active['breakeven']:,.2f}")
-    m6.metric("एकूण कर व व्याज", f"₹{active['total_charges']:,.2f}", f"व्याज: ₹{active['interest']:,.2f}")
-
-    if product == "MTF Swing":
-        st.warning(f"🚨 **MTF Margin Call धोक्याची किंमत:** ₹{active['danger_price']:,.2f} (फंडिंग रक्कम: ₹{active['funded_amt']:,.2f})")
-
-    st.subheader("💰 ५०% अर्धा नफा बुकिंग प्लॅनर")
-    partial_df = pd.DataFrame({
-        "टप्पा (Stage)": ["टप्पा १: Target 1 (50% Book)", "टप्पा २: Target 2 (उरलेले 50%)", "एकूण एकत्रित निव्वळ नफा"],
-        "विक्री किंमत": [f"₹{t1:,.2f}", f"₹{t2:,.2f}", "-"],
-        "शेअर्स (Qty)": [f"{active['half_qty']} शेअर्स", f"{active['rem_qty']} शेअर्स", f"{active['safe_qty']} शेअर्स"],
-        "निव्वळ नफा": [f"₹{active['p1_profit']:,.2f}", f"₹{active['p2_profit']:,.2f}", f"₹{active['partial_total']:,.2f}"]
-    })
-    st.dataframe(partial_df, use_container_width=True, hide_index=True)
-
-    st.subheader("⚔️ Dhan विरुद्ध Zerodha थेट तुलना")
-    comp_df = pd.DataFrame({
-        "तपशील": ["मार्जिन %", "ब्रोकरेज", "MTF व्याज", "सरकारी कर व DP", "एकूण खर्च", "Target 2 निव्वळ नफा"],
-        "Dhan": [f"{dhan_m}%", f"₹{res_dhan['brokerage']:,.2f}", f"₹{res_dhan['interest']:,.2f}", f"₹{res_dhan['taxes']:,.2f}", f"₹{res_dhan['total_charges']:,.2f}", f"₹{res_dhan['net_profit']:,.2f}"],
-        "Zerodha": [f"{zero_m}%", f"₹{res_zero['brokerage']:,.2f}", f"₹{res_zero['interest']:,.2f}", f"₹{res_zero['taxes']:,.2f}", f"₹{res_zero['total_charges']:,.2f}", f"₹{res_zero['net_profit']:,.2f}"],
-    })
-    st.dataframe(comp_df, use_container_width=True, hide_index=True)
-
-    diff = round(res_dhan["net_profit"] - res_zero["net_profit"], 2)
-    if diff > 0:
-        st.success(f"✅ **Dhan** वर तुम्हाला **₹{diff:,.2f} जास्त निव्वळ नफा** उरतो!")
-    elif diff < 0:
-        st.success(f"✅ **Zerodha** वर तुम्हाला **₹{abs(diff):,.2f} जास्त निव्वळ नफा** उरतो!")
-
-    st.subheader("🛡️ Trailing Stop-Loss (TSL) प्लॅनर")
-    risk_pts = abs(entry - sl)
-    tsl_df = pd.DataFrame({
-        "टप्पा": ["1R (1:1)", "1.5R (1:1.5)", "2R (1:2)", "3R (1:3)"],
-        "Trigger किंमत": [f"₹{entry + risk_pts:,.2f}", f"₹{entry + 1.5 * risk_pts:,.2f}", f"₹{entry + 2 * risk_pts:,.2f}", f"₹{entry + 3 * risk_pts:,.2f}"],
-        "नवीन Trailing SL": [f"₹{active['breakeven']:,.2f}", f"₹{entry + 0.5 * risk_pts:,.2f}", f"₹{entry + risk_pts:,.2f}", f"₹{entry + 2 * risk_pts:,.2f}"],
-    })
-    st.dataframe(tsl_df, use_container_width=True, hide_index=True)
 
 
 def render_app():
@@ -1070,6 +876,11 @@ def render_app():
         if st.button("🔄 रिफ्रेश करा", key="global_refresh_btn", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
+
+    df_stocks = load_stocks_and_margins()
+    if df_stocks.empty:
+        st.error("Nifty_500_Stocks.xlsx सापडली नाही! कृपया GitHub रेपॉझिटरी तपासा.")
+        return
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🧮 कॅल्क्युलेटर",
