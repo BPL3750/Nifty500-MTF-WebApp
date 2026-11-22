@@ -1037,7 +1037,6 @@ def render_price_volume_tab(tab_obj, df_stocks):
         m3.metric("🟡 3. Weak Rally / Trap", f"{len(q3_df)} शेअर्स", "Low Vol & Price +")
         m4.metric("🔵 4. Pullback / Low Interest", f"{len(q4_df)} शेअर्स", "Low Vol & Price -")
 
-        # यादी निवडण्याचा ड्रॉपडाउन
         sel_cat = st.selectbox(
             "🔍 कोणती यादी पाहायची आहे ते निवडा:",
             [
@@ -1046,41 +1045,67 @@ def render_price_volume_tab(tab_obj, df_stocks):
                 f"🟡 3. Weak Rally / Trap ({len(q3_df)} शेअर्स — फसवी तेजी, सावध राहावे)",
                 f"🔵 4. Lack of Interest / Pullback ({len(q4_df)} शेअर्स — तात्पुरती घसरण)",
                 f"📋 सर्व Nifty 500 शेअर्स ({len(pv_df)} शेअर्स)"
-            ]
+            ],
+            key="pv_cat_select"
         )
 
         if sel_cat.startswith("🟢"):
-            show_df = q1_df
+            cat_df = q1_df
             bar_color = "#00A86B"
             clean_file_prefix = "1_Strong_Uptrend_Breakout"
             chart_title = f"🟢 Top 15 Breakout शेअर्स ({base_mode})"
         elif sel_cat.startswith("🔴"):
-            show_df = q2_df
+            cat_df = q2_df
             bar_color = "#E74C3C"
             clean_file_prefix = "2_Strong_Downtrend_Panic_Selling"
             chart_title = f"🔴 Top 15 Panic Selling शेअर्स ({base_mode})"
         elif sel_cat.startswith("🟡"):
-            show_df = q3_df
+            cat_df = q3_df
             bar_color = "#F39C12"
             clean_file_prefix = "3_Weak_Rally_Trap"
             chart_title = "🟡 Top 15 Weak Rally / Trap शेअर्स (कमी व्हॉल्यूम तेजी)"
         elif sel_cat.startswith("🔵"):
-            show_df = q4_df
+            cat_df = q4_df
             bar_color = "#3498DB"
             clean_file_prefix = "4_Lack_of_Interest_Pullback"
             chart_title = "🔵 Top 15 Pullback शेअर्स (कमी व्हॉल्यूम घसरण)"
         else:
-            show_df = pv_df.sort_values(by=ratio_col, ascending=False)
+            cat_df = pv_df.sort_values(by=ratio_col, ascending=False)
             bar_color = "#1F4E78"
             clean_file_prefix = "All_Nifty500_Price_Volume"
             chart_title = f"📋 सर्वाधिक व्हॉल्यूम असलेले Top 15 शेअर्स ({base_mode})"
 
-        # २ स्पष्ट आणि अर्थपूर्ण बार चार्ट्स
-        g_left, g_right = st.columns((1.2, 1))
+        # सेक्टर फिल्टर (चार्ट आणि तक्ता दोन्हीसाठी काम करेल)
+        base_clean_df = cat_df.drop(columns=["Signal_Category"], errors="ignore").copy()
+        sec_options = ["सर्व सेक्टर्स (All Sectors)"] + sorted(base_clean_df["Sector"].dropna().unique().tolist())
+
+        f_sec, dl_c2 = st.columns((2.5, 1.2))
+        sel_sec = f_sec.selectbox("🏭 सेक्टरनुसार फिल्टर करा (Sector Filter)", sec_options, key=f"pv_sec_{clean_file_prefix}")
+
+        if sel_sec != "सर्व सेक्टर्स (All Sectors)":
+            export_df = base_clean_df[base_clean_df["Sector"] == sel_sec].copy()
+        else:
+            export_df = base_clean_df.copy()
+
+        today_str = datetime.now().strftime("%d-%b-%Y")
+        dl_filename = f"{clean_file_prefix}_{len(export_df)}_Stocks_{today_str}.csv"
+
+        with dl_c2:
+            st.write("")
+            st.download_button(
+                label=f"📥 CSV डाउनलोड ({len(export_df)})",
+                data=export_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name=dl_filename,
+                mime="text/csv",
+                use_container_width=True
+            )
+
+        # २ स्वच्छ आलेख: डावीकडे Bar Chart, उजवीकडे फक्त Sector -> Stock Treemap
+        g_left, g_right = st.columns((1.15, 1))
         with g_left:
             with st.container(border=True):
-                if not show_df.empty:
-                    top_bar = show_df.head(15).copy()
+                if not export_df.empty:
+                    top_bar = export_df.head(15).copy()
                     x_metric = chg_col if sel_cat.startswith(("🟡", "🔵")) else ratio_col
                     top_bar["Bar_Label"] = top_bar.apply(
                         lambda r: f" {r[ratio_col]:.2f}x | {r[chg_col]:+.1f}%", axis=1
@@ -1109,41 +1134,7 @@ def render_price_volume_tab(tab_obj, df_stocks):
 
         with g_right:
             with st.container(border=True):
-                sec_sub = pv_df[pv_df["Signal_Category"].str.startswith(("1.", "2."))].copy()
-                if not sec_sub.empty:
-                    sec_grp = sec_sub.groupby(["Sector", "Signal_Category"], as_index=False).size()
-                    top_secs = sec_sub["Sector"].value_counts().head(8).index.tolist()
-                    sec_grp = sec_grp[sec_grp["Sector"].isin(top_secs)]
-                    fig_sec = px.bar(
-                        sec_grp,
-                        x="size",
-                        y="Sector",
-                        color="Signal_Category",
-                        orientation="h",
-                        barmode="group",
-                        text="size",
-                        title="🏭 सेक्टरनुसार Breakout विरुद्ध Panic Selling",
-                        color_discrete_map={
-                            "1. Strong Uptrend / Breakout": "#00A86B",
-                            "2. Strong Downtrend / Panic Selling": "#E74C3C"
-                        }
-                    )
-                    fig_sec.update_traces(textposition="outside")
-                    fig_sec.update_layout(
-                        height=440,
-                        yaxis_title="",
-                        xaxis_title="शेअर्सची संख्या",
-                        legend_title="",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
-                        margin=dict(l=10, r=30, t=65, b=10)
-                    )
-                    st.plotly_chart(fig_sec, use_container_width=True)
-                else:
-                    st.info("सेक्टर तुलना डेटा उपलब्ध नाही.")
-
-        with g_right:
-            with st.container(border=True):
-                tree_df = show_df.head(35).copy() if not show_df.empty else pd.DataFrame()
+                tree_df = export_df.head(35).copy() if not export_df.empty else pd.DataFrame()
                 if not tree_df.empty:
                     tree_df["Box_Size"] = tree_df[ratio_col].clip(lower=0.1)
                     fig_tree = px.treemap(
@@ -1166,29 +1157,6 @@ def render_price_volume_tab(tab_obj, df_stocks):
                 else:
                     st.info("सेक्टर नकाशासाठी डेटा उपलब्ध नाही.")
 
-        # सेक्टर फिल्टर आणि अचूक नावासह थेट CSV डाउनलोड बटन
-        export_df = show_df.drop(columns=["Signal_Category"], errors="ignore").copy()
-        sec_options = ["सर्व सेक्टर्स (All Sectors)"] + sorted(export_df["Sector"].dropna().unique().tolist())
-
-        f_sec, dl_c2 = st.columns((2.5, 1.2))
-        sel_sec = f_sec.selectbox("🏭 सेक्टरनुसार फिल्टर करा (Sector Filter)", sec_options, key="pv_sec_filter")
-        if sel_sec != "सर्व सेक्टर्स (All Sectors)":
-            export_df = export_df[export_df["Sector"] == sel_sec]
-
-        today_str = datetime.now().strftime("%d-%b-%Y")
-        dl_filename = f"{clean_file_prefix}_{len(export_df)}_Stocks_{today_str}.csv"
-
-        with dl_c2:
-            st.write("")
-            st.download_button(
-                label=f"📥 CSV डाउनलोड ({len(export_df)})",
-                data=export_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name=dl_filename,
-                mime="text/csv",
-                use_container_width=True
-            )
-
-
         st.dataframe(
             export_df,
             use_container_width=True,
@@ -1205,7 +1173,6 @@ def render_price_volume_tab(tab_obj, df_stocks):
                 "Vol vs 2025+ (x)": st.column_config.NumberColumn(format="%.2fx"),
             }
         )
-
 
 
 def render_app():
