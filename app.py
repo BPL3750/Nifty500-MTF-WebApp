@@ -727,66 +727,72 @@ def render_journal_charts(closed_df, wins, losses):
 
     g1, g2 = st.columns(2)
     with g1:
-        fig_eq = px.area(
-            closed_df, x="Trade_No", y="Cumulative_PnL",
-            hover_data=["SYMBOL", "ACCOUNT_HOLDER", "BROKER", "SEGMENT", "NET_PNL"],
-            title="📈 एकूण भांडवल वाढ आलेख (Equity Curve ₹)",
-            color_discrete_sequence=["#00A86B"]
-        )
-        fig_eq.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
-        st.plotly_chart(fig_eq, use_container_width=True)
+        with st.container(border=True):
+            fig_eq = px.area(
+                closed_df, x="Trade_No", y="Cumulative_PnL",
+                hover_data=["SYMBOL", "ACCOUNT_HOLDER", "BROKER", "SEGMENT", "NET_PNL"],
+                title="📈 एकूण भांडवल वाढ आलेख (Equity Curve ₹)",
+                color_discrete_sequence=["#00A86B"]
+            )
+            fig_eq.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
+            st.plotly_chart(fig_eq, use_container_width=True)
 
     with g2:
-        pie_df = pd.DataFrame({"Result": ["Wins", "Losses"], "Count": [wins, losses]})
-        fig_pie = px.pie(
-            pie_df, values="Count", names="Result", hole=0.55,
-            title="🎯 Win vs Loss प्रमाण (Trade Sentiment)",
-            color="Result", color_discrete_map={"Wins": "#00A86B", "Losses": "#E74C3C"}
-        )
-        fig_pie.update_traces(textinfo="value+percent")
-        fig_pie.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
-        st.plotly_chart(fig_pie, use_container_width=True)
+        with st.container(border=True):
+            pie_df = pd.DataFrame({"Result": ["Wins", "Losses"], "Count": [wins, losses]})
+            fig_pie = px.pie(
+                pie_df, values="Count", names="Result", hole=0.55,
+                title="🎯 Win vs Loss प्रमाण (Trade Sentiment)",
+                color="Result", color_discrete_map={"Wins": "#00A86B", "Losses": "#E74C3C"}
+            )
+            fig_pie.update_traces(textinfo="value+percent")
+            fig_pie.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
+            st.plotly_chart(fig_pie, use_container_width=True)
 
     valid_m = closed_df.dropna(subset=["EXIT_DT"]).copy()
     if not valid_m.empty:
-        valid_m["YearMonth"] = valid_m["EXIT_DT"].dt.to_period("M")
-        m_grp = valid_m.groupby("YearMonth", as_index=False)["NET_PNL"].sum().sort_values("YearMonth")
-        m_grp["Month"] = m_grp["YearMonth"].dt.strftime("%b-%Y")
-        m_grp["Color"] = m_grp["NET_PNL"].apply(lambda v: "Profit" if v >= 0 else "Loss")
-        m_grp["Label"] = m_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}")
-        fig_m = px.bar(
-            m_grp, x="Month", y="NET_PNL", text="Label", color="Color",
-            title="📅 महिनानिहाय नफा-तोटा आलेख (Monthly Net P&L ₹)",
-            color_discrete_map={"Profit": "#00A86B", "Loss": "#E74C3C"}
-        )
-        fig_m.update_traces(textposition="outside")
-        fig_m.update_layout(height=360, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
-        st.plotly_chart(fig_m, use_container_width=True)
+        with st.container(border=True):
+            valid_m["YearMonth"] = valid_m["EXIT_DT"].dt.to_period("M")
+            m_grp = valid_m.groupby("YearMonth", as_index=False)["NET_PNL"].sum().sort_values("YearMonth")
+            m_grp["Month"] = m_grp["YearMonth"].dt.strftime("%b-%Y")
+            m_grp["Color"] = m_grp["NET_PNL"].apply(lambda v: "Profit" if v >= 0 else "Loss")
+            m_grp["Label"] = m_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}")
+            fig_m = px.bar(
+                m_grp, x="Month", y="NET_PNL", text="Label", color="Color",
+                title="📅 महिनानिहाय नफा-तोटा आलेख (Monthly Net P&L ₹)",
+                color_discrete_map={"Profit": "#00A86B", "Loss": "#E74C3C"}
+            )
+            fig_m.update_traces(textposition="outside")
+            fig_m.update_layout(height=360, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
+            st.plotly_chart(fig_m, use_container_width=True)
 
     g3, g4 = st.columns(2)
     with g3:
-        acc_grp = closed_df.groupby("ACCOUNT_HOLDER", as_index=False)["NET_PNL"].sum()
-        acc_grp["Label"] = acc_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}")
-        fig_acc = px.bar(
-            acc_grp, x="ACCOUNT_HOLDER", y="NET_PNL", text="Label",
-            title="👥 खातेधारकानुसार निव्वळ नफा (₹)",
-            color="NET_PNL", color_continuous_scale=["#E74C3C", "#2ECC71"]
-        )
-        fig_acc.update_traces(textposition="outside")
-        fig_acc.update_layout(height=350, showlegend=False, coloraxis_showscale=False, margin=dict(l=10, r=10, t=45, b=10))
-        st.plotly_chart(fig_acc, use_container_width=True)
+        with st.container(border=True):
+            acc_grp = closed_df.groupby("ACCOUNT_HOLDER", as_index=False)["NET_PNL"].sum()
+            acc_grp["Label"] = acc_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}")
+            fig_acc = px.bar(
+                acc_grp, x="ACCOUNT_HOLDER", y="NET_PNL", text="Label",
+                title="👥 खातेधारकानुसार निव्वळ नफा (₹)",
+                color="NET_PNL", color_continuous_scale=["#E74C3C", "#2ECC71"]
+            )
+            fig_acc.update_traces(textposition="outside")
+            fig_acc.update_layout(height=350, showlegend=False, coloraxis_showscale=False, margin=dict(l=10, r=10, t=45, b=10))
+            st.plotly_chart(fig_acc, use_container_width=True)
 
     with g4:
-        brk_grp = closed_df.groupby("BROKER", as_index=False)["NET_PNL"].sum()
-        brk_grp["Label"] = brk_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}")
-        fig_brk = px.bar(
-            brk_grp, x="BROKER", y="NET_PNL", text="Label",
-            title="🏦 ब्रोकरनुसार निव्वळ नफा (₹)",
-            color="BROKER"
-        )
-        fig_brk.update_traces(textposition="outside")
-        fig_brk.update_layout(height=350, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
-        st.plotly_chart(fig_brk, use_container_width=True)
+        with st.container(border=True):
+            brk_grp = closed_df.groupby("BROKER", as_index=False)["NET_PNL"].sum()
+            brk_grp["Label"] = brk_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}")
+            fig_brk = px.bar(
+                brk_grp, x="BROKER", y="NET_PNL", text="Label",
+                title="🏦 ब्रोकरनुसार निव्वळ नफा (₹)",
+                color="BROKER"
+            )
+            fig_brk.update_traces(textposition="outside")
+            fig_brk.update_layout(height=350, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
+            st.plotly_chart(fig_brk, use_container_width=True)
+
 
 
 def render_tab4_journal(tab4):
