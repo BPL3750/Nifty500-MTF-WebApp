@@ -675,28 +675,216 @@ def render_tab4_journal(tab4):
                     "RETURN_%": st.column_config.NumberColumn("Return %", format="%.2f%%"),
                 }
             )
+@st.cache_data(ttl=900)
+def get_daily_date_folders():
+    service, root_id, err = get_gdrive_service()
+    if err:
+        return [], err
+    try:
+        q_daily = f"name='01_Daily_Reports' and '{root_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        daily_res = service.files().list(q=q_daily, fields="files(id)").execute().get("files", [])
+        if not daily_res:
+            return [], "Drive वर '01_Daily_Reports' फोल्डर सापडले नाही."
+        daily_id = next(iter(daily_res)).get("id")
+        q_dates = f"'{daily_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        folders = service.files().list(
+            q=q_dates, orderBy="createdTime desc", pageSize=15, fields="files(id, name)"
+        ).execute().get("files", [])
+        return folders, None
+    except Exception as e:
+        return [], f"तारीख फोल्डर वाचताना त्रुटी: {e}"
 
+
+def find_subfolder_id(service, parent_id, folder_name):
+    q = f"name='{folder_name}' and '{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    res = service.files().list(q=q, fields="files(id)").execute().get("files", [])
+    return next(iter(res)).get("id") if res else None
+
+
+@st.cache_data(ttl=900)
+def fetch_charts_and_excel(date_folder_id, mode):
+    """mode = 'breakout' किंवा 'trendline' साठी ताजी Excel फाईल आणि PNG चार्ट्स आणणे"""
+    service, _, err = get_gdrive_service()
+    if err:
+        return pd.DataFrame(), {}, err
+
+    try:
+        if mode == "breakout":
+            scan_dir_id = find_subfolder_id(service, date_folder_id, "Full_Market_Scan")
+            excel_parent = scan_dir_id or date_folder_id
+            excel_prefix = "Breakout_Scanner"
+            chart_dir_id = find_subfolder_id(service, scan_dir_id, "Charts") if scan_dir_id else None
+        else:
+            excel_parent = date_folder_id
+            excel_prefix = "Analyze_Trending_charts"
+            chart_dir_id = find_subfolder_id(service, date_folder_id, "Trendline_Charts")
+
+        # १. सर्वात ताजी Excel फाईल डाउनलोड करणे
+        q_xl = f"'{excel_parent}' in parents and name contains '{excel_prefix}' and name contains '.xlsx' and trashed=false"
+        xl_files = service.files().list(
+            q=q_xl, orderBy="createdTime desc", pageSize=5, fields="files(id, name)"
+        ).execute().get("files", [])
+
+        df_excel = pd.DataFrame()
+        if xl_files:
+            latest_xl = next(iter(xl_files))
+            req = service.files().get_media(fileId=latest_xl.get("id"))
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, req)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            fh.seek(0)
+            xl_obj = pd.ExcelFile(fh)
+            df_excel = pd.read_excel(xl_obj, sheet_name=next(iter(xl_obj.sheet_names)))
+
+        # २. PNG चार्ट्सची यादी (प्रत्येक शेअरचा सर्वात ताजा चार्ट)
+        chart_map = {}
+        if chart_dir_id:
+            q_png = f"'{chart_dir_id}' in parents and name contains '.png' and trashed=false"
+            png_files = service.files().list(
+                q=q_png, orderBy="createdTime desc", pageSize=250, fields="files(id, name)"
+            ).execute().get("files", [])
+
+            for pf in png_files:
+                fname = pf.get("name", "")
+                sym = fname.split("_").pop(0).strip().upper()
+                if sym and sym not in chart_map:
+                    chart_map[sym] = {"id": pf.get("id"), "name": fname}
+
+        return df_excel, chart_map, None
+    except Exception as e:
+        return pd.DataFrame(), {}, f"चार्ट डेटा वाचताना त्रुटी: {e}"
+
+
+@st.cache_data(ttl=1800)
+def download_chart_bytes(file_id):
+    service, _, err = get_gdrive_service()
+    if err:
+        return None
+    req = service.files().get_media(fileId=file_id)
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, req)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    return fh.getvalue()
+
+def render_chart_scanner_tab(tab_obj, mode, tab_heading):
+    with tab_obj:
+        st.subheader(tab_heading)
+        folders, f_err = get_daily_date_folders()
+        if f_err:
+            st.info(f_err)
+            return
+        if not folders:
+            st.warning("अजून कोणतेही तारीख फोल्डर सापडले नाही.")
+            return
+
+        folder_map = {f.get("name"): f.get("id") for f in folders}
+        c_date, c_view = st.columns([1, 2])
+        sel_date = c_date.selectbox("📅 तारीख निवडा (Date)", list(folder_map.keys()), key=f"dt_{mode}")
+        view_mode = c_view.radio(
+            "दृश्य निवडा (View Mode)",
+            ["🔍 एक शेअर निवडा (Single Chart + Data)", "🖼️ सर्व चार्ट्स गॅलरी (All Charts Grid)"],
+            horizontal=True,
+            key=f"vm_{mode}"
+        )
+
+        df_excel, chart_map, c_err = fetch_charts_and_excel(folder_map[sel_date], mode)
+        if c_err:
+            st.error(c_err)
+            return
+
+        # Excel मधील सिम्बॉल्स आणि चार्ट्सचे सिम्बॉल्स एकत्र करणे
+        excel_syms = []
+        sym_col = None
+        for col in df_excel.columns:
+            if str(col).strip().upper() in ("SYMBOL", "STOCK", "TICKER"):
+                sym_col = col
+                excel_syms = [str(s).strip().upper() for s in df_excel[col].dropna().unique()]
+                break
+
+        all_syms = sorted(list(set(list(chart_map.keys()) + excel_syms)))
+
+        if not all_syms and df_excel.empty:
+            st.warning(f"📅 **{sel_date}** या तारखेसाठी चार्ट्स किंवा रिपोर्ट उपलब्ध नाहीत.")
+            return
+
+        if view_mode.startswith("🔍"):
+            if all_syms:
+                sel_sym = st.selectbox(
+                    f"📈 शेअर निवडा ({len(chart_map)} चार्ट्स उपलब्ध)",
+                    all_syms,
+                    key=f"sym_{mode}"
+                )
+
+                # निवडलेल्या शेअरची Excel मधील माहिती वर दाखवणे
+                if not df_excel.empty and sym_col:
+                    match_rows = df_excel[df_excel[sym_col].astype(str).str.strip().str.upper() == sel_sym]
+                    if not match_rows.empty:
+                        st.markdown(f"**📋 {sel_sym} — स्कॅनर विश्लेषण तपशील:**")
+                        st.dataframe(
+                            match_rows,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config=get_smart_col_config(match_rows)
+                        )
+
+                # निवडलेल्या शेअरचा चार्ट दाखवणे
+                if sel_sym in chart_map:
+                    img_bytes = download_chart_bytes(chart_map[sel_sym]["id"])
+                    if img_bytes:
+                        st.image(img_bytes, caption=f"{sel_sym} — {chart_map[sel_sym]['name']}", use_container_width=True)
+                else:
+                    st.info(f"ℹ️ **{sel_sym}** साठी PNG चार्ट इमेज उपलब्ध नाही, फक्त वरील डेटा उपलब्ध आहे.")
+        else:
+            if not chart_map:
+                st.info("या तारखेसाठी PNG चार्ट्स सापडले नाहीत.")
+            else:
+                st.success(f"एकूण **{len(chart_map)}** ताजे चार्ट्स लोड झाले आहेत:")
+                grid_cols = st.columns(2)
+                for idx, (sym, info) in enumerate(sorted(chart_map.items())):
+                    img_bytes = download_chart_bytes(info["id"])
+                    if img_bytes:
+                        with grid_cols[idx % 2]:
+                            st.image(img_bytes, caption=f"{sym} ({info['name']})", use_container_width=True)
+
+        # तळाशी पूर्ण Excel तक्ता
+        if not df_excel.empty:
+            with st.expander(f"📊 संपूर्ण Excel डेटा तक्ता पहा ({len(df_excel)} शेअर्स)", expanded=False):
+                st.dataframe(
+                    df_excel,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=500,
+                    column_config=get_smart_col_config(df_excel)
+                )
 
 def render_app():
     st.title("📈 Nifty 500 MTF & MIS Pro")
-    st.caption("Dhan, Zerodha, FYERS, Groww — पोझिशन सायझिंग, ब्रेकआऊट रिपोर्ट्स आणि ट्रेड जर्नल")
+    st.caption("Dhan, Zerodha, FYERS, Groww — पोझिशन सायझिंग, ब्रेकआऊट व ट्रेंडलाईन चार्ट्स आणि ट्रेड जर्नल")
 
     df_stocks = load_stocks_and_margins()
     if df_stocks.empty:
         st.error("Nifty_500_Stocks.xlsx सापडली नाही! कृपया GitHub रेपॉझिटरी तपासा.")
         return
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🧮 कॅल्क्युलेटर",
         "🚀 ब्रेकआऊट रिपोर्ट्स",
+        "📈 ब्रेकआऊट चार्ट्स",
+        "📐 ट्रेंडलाईन चार्ट्स",
         "📊 ५०० शेअर्स मार्जिन",
         "🏆 ट्रेड जर्नल (P&L)"
     ])
 
     with tab1:
         render_tab1_calculator(df_stocks)
-    render_tab2_and_tab3(tab2, tab3, df_stocks)
-    render_tab4_journal(tab4)
+    render_tab2_and_tab3(tab2, tab5, df_stocks)
+    render_chart_scanner_tab(tab3, "breakout", "📈 Breakouts Scanner & Live Charts (Full Market Scan)")
+    render_chart_scanner_tab(tab4, "trendline", "📐 Auto Trendline Analysis & Charts")
+    render_tab4_journal(tab6)
 
 
 if __name__ == "__main__":
