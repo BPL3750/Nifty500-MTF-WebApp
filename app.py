@@ -443,7 +443,8 @@ def add_total_row(df_in, label_col):
 
 def render_tab4_journal(tab4):
     with tab4:
-        st.subheader("🏆 एकत्रित ट्रेड जर्नल व इंटरॲक्टिव्ह डॅशबोर्ड")
+        j_col1, j_col2 = st.columns((5, 1))
+        j_col1.subheader("🏆 एकत्रित ट्रेड जर्नल व इंटरॲक्टिव्ह डॅशबोर्ड")
 
         # खाजगी P&L डेटा सुरक्षित ठेवण्यासाठी पासवर्ड लॉक
         app_pin = st.secrets.get("JOURNAL_PASSWORD", "1234")
@@ -461,8 +462,12 @@ def render_tab4_journal(tab4):
                     st.error("❌ चुकीचा पासवर्ड! कृपया पुन्हा प्रयत्न करा.")
             return
 
+        if j_col2.button("🔒 लॉक करा", key="lock_journal_btn"):
+            st.session_state["journal_unlocked"] = False
+            st.rerun()
 
         sheets_data, j_err = fetch_master_trade_journal()
+        
         if j_err:
             st.info(j_err)
             return
@@ -890,13 +895,16 @@ def render_chart_scanner_tab(tab_obj, mode, tab_heading):
 
 
 def render_app():
-    st.title("📈 Nifty 500 MTF & MIS Pro")
-    st.caption("Dhan, Zerodha, FYERS, Groww — पोझिशन सायझिंग, ब्रेकआऊट व ट्रेंडलाईन चार्ट्स आणि ट्रेड जर्नल")
+    top_c1, top_c2 = st.columns((5, 1))
+    with top_c1:
+        st.title("📈 Nifty 500 MTF & MIS Pro")
+        st.caption("Dhan, Zerodha, FYERS, Groww — पोझिशन सायझिंग, ब्रेकआऊट व ट्रेंडलाईन चार्ट्स आणि ट्रेड जर्नल")
+    with top_c2:
+        st.write("")
+        if st.button("🔄 रिफ्रेश करा", key="global_refresh_btn", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
 
-    df_stocks = load_stocks_and_margins()
-    if df_stocks.empty:
-        st.error("Nifty_500_Stocks.xlsx सापडली नाही! कृपया GitHub रेपॉझिटरी तपासा.")
-        return
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🧮 कॅल्क्युलेटर",
