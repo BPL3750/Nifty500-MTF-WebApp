@@ -794,7 +794,6 @@ def render_journal_charts(closed_df, wins, losses):
             st.plotly_chart(fig_brk, use_container_width=True)
 
 
-
 def render_tab4_journal(tab4):
     with tab4:
         j_col1, j_col2 = st.columns((5, 1))
@@ -934,6 +933,175 @@ def render_tab4_journal(tab4):
                 }
             )
 
+@st.cache_data(ttl=1800)
+def build_price_volume_matrix(symbols_tuple, company_map, industry_map):
+    """२०२५ पासूनचा सरासरी व्हॉल्यूम, २०-दिवस व्हॉल्यूम आणि किमतीतील बदलाचा डेटा तयार करणे"""
+    rows = []
+    try:
+        tickers = [f"{s}.NS" for s in symbols_tuple if s and not s.startswith("DUMMY")]
+        data = yf.download(tickers, start="2025-01-01", progress=False)
+        if data.empty or "Close" not in data or "Volume" not in data:
+            return pd.DataFrame()
+
+        close_df = data["Close"]
+        vol_df = data["Volume"]
+
+        for s in symbols_tuple:
+            col = f"{s}.NS"
+            if col not in close_df.columns or col not in vol_df.columns:
+                continue
+
+            c_ser = close_df[col].dropna()
+            v_ser = vol_df[col].dropna()
+            if len(c_ser) < 22 or len(v_ser) < 22:
+                continue
+
+            cmp = round(float(c_ser.iloc[-1]), 2)
+            prev_1d = float(c_ser.iloc[-2])
+            prev_5d = float(c_ser.iloc[-6]) if len(c_ser) >= 6 else prev_1d
+
+            chg_1d = round(((cmp - prev_1d) / prev_1d) * 100, 2) if prev_1d > 0 else 0.0
+            chg_5d = round(((cmp - prev_5d) / prev_5d) * 100, 2) if prev_5d > 0 else 0.0
+
+            curr_vol = int(v_ser.iloc[-1])
+            avg_vol_20d = int(v_ser.iloc[-21:-1].mean())
+            avg_vol_2025 = int(v_ser.iloc[:-1].mean())
+
+            vol_ratio_20d = round(curr_vol / avg_vol_20d, 2) if avg_vol_20d > 0 else 0.0
+            vol_ratio_2025 = round(curr_vol / avg_vol_2025, 2) if avg_vol_2025 > 0 else 0.0
+
+            rows.append({
+                "Symbol": s,
+                "Company": company_map.get(s, s),
+                "Sector": industry_map.get(s, "-"),
+                "CMP (₹)": cmp,
+                "1D Chg %": chg_1d,
+                "5D Chg %": chg_5d,
+                "Current Vol": curr_vol,
+                "20D Avg Vol": avg_vol_20d,
+                "2025+ Avg Vol": avg_vol_2025,
+                "Vol vs 20D (x)": vol_ratio_20d,
+                "Vol vs 2025+ (x)": vol_ratio_2025,
+            })
+    except Exception:
+        pass
+
+    return pd.DataFrame(rows)
+
+def render_price_volume_tab(tab_obj, df_stocks):
+    with tab_obj:
+        st.subheader("📊 Nifty 500 प्राईस-व्हॉल्यूम मॅट्रिक्स (2025+ Baseline)")
+        st.caption("२०२५ पासूनच्या सरासरी व्हॉल्यूम आणि किमतीतील बदलावर आधारित ४ प्रमुख मार्केट संकेत")
+
+        c1, c2, c3 = st.columns((1.2, 1.2, 1.6))
+        tf_mode = c1.radio("कालावधी (Timeframe)", ["१ दिवस (1D Change)", "५ दिवस (5D Swing)"], horizontal=True)
+        base_mode = c2.radio("व्हॉल्यूम तुलना (Baseline)", ["2025+ Avg Vol", "20D Avg Vol"], horizontal=True)
+        vol_thresh = c3.slider("High Volume मर्यादा (किमान पट / x)", min_value=1.2, max_value=3.0, value=1.5, step=0.1)
+
+        comp_map = dict(zip(df_stocks["Symbol"], df_stocks["Company"]))
+        ind_map = dict(zip(df_stocks["Symbol"], df_stocks["Industry"]))
+
+        with st.spinner("Nifty 500 शेअर्सचा २०२५ पासूनचा व्हॉल्यूम व प्राईस डेटा तपासत आहे..."):
+            pv_df = build_price_volume_matrix(tuple(df_stocks["Symbol"].tolist()), comp_map, ind_map)
+
+        if pv_df.empty:
+            st.warning("सध्या प्राईस-व्हॉल्यूम डेटा लोड होऊ शकला नाही. कृपया थोड्या वेळाने रिफ्रेश करा.")
+            return
+
+        chg_col = "1D Chg %" if tf_mode.startswith("१") else "5D Chg %"
+        ratio_col = "Vol vs 2025+ (x)" if base_mode.startswith("2025") else "Vol vs 20D (x)"
+
+        def classify_quadrant(r):
+            v_rat = r[ratio_col]
+            p_chg = r[chg_col]
+            if v_rat >= vol_thresh and p_chg > 0:
+                return "1. Strong Uptrend / Breakout (+Vol, +Price)"
+            elif v_rat >= vol_thresh and p_chg < 0:
+                return "2. Strong Downtrend / Panic Selling (+Vol, -Price)"
+            elif v_rat < 1.0 and p_chg >= 1.0:
+                return "3. Weak Rally / Trap (-Vol, +Price)"
+            elif v_rat < 1.0 and p_chg <= -1.0:
+                return "4. Lack of Interest / Pullback (-Vol, -Price)"
+            return "Neutral (सामान्य हालचाल)"
+
+        pv_df["Signal_Category"] = pv_df.apply(classify_quadrant, axis=1)
+
+        q1_df = pv_df[pv_df["Signal_Category"].str.startswith("1.")].sort_values(by=ratio_col, ascending=False)
+        q2_df = pv_df[pv_df["Signal_Category"].str.startswith("2.")].sort_values(by=ratio_col, ascending=False)
+        q3_df = pv_df[pv_df["Signal_Category"].str.startswith("3.")].sort_values(by=chg_col, ascending=False)
+        q4_df = pv_df[pv_df["Signal_Category"].str.startswith("4.")].sort_values(by=chg_col, ascending=True)
+
+        # ४ संकेतांचे KPI कार्ड्स
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("🟢 1. Strong Breakout", f"{len(q1_df)} शेअर्स", f"Vol ≥ {vol_thresh}x & Price +")
+        m2.metric("🔴 2. Panic Selling", f"{len(q2_df)} शेअर्स", f"Vol ≥ {vol_thresh}x & Price -")
+        m3.metric("🟡 3. Weak Rally / Trap", f"{len(q3_df)} शेअर्स", "Low Vol & Price +")
+        m4.metric("🔵 4. Pullback / Low Interest", f"{len(q4_df)} शेअर्स", "Low Vol & Price -")
+
+        # इंटरॲक्टिव्ह मॅट्रिक्स चार्ट
+        active_plot_df = pv_df[~pv_df["Signal_Category"].str.startswith("Neutral")].copy()
+        if not active_plot_df.empty:
+            with st.container(border=True):
+                fig_pv = px.scatter(
+                    active_plot_df,
+                    x=chg_col,
+                    y=ratio_col,
+                    color="Signal_Category",
+                    hover_data=["Symbol", "Company", "Sector", "CMP (₹)", "Current Vol", "2025+ Avg Vol"],
+                    title=f"🎯 Price Change % विरुद्ध {base_mode} Ratio मॅट्रिक्स",
+                    color_discrete_map={
+                        "1. Strong Uptrend / Breakout (+Vol, +Price)": "#00A86B",
+                        "2. Strong Downtrend / Panic Selling (+Vol, -Price)": "#E74C3C",
+                        "3. Weak Rally / Trap (-Vol, +Price)": "#F39C12",
+                        "4. Lack of Interest / Pullback (-Vol, -Price)": "#3498DB",
+                    }
+                )
+                fig_pv.add_hline(y=vol_thresh, line_dash="dash", line_color="gray")
+                fig_pv.add_vline(x=0, line_dash="dash", line_color="gray")
+                fig_pv.update_layout(height=420, margin=dict(l=10, r=10, t=45, b=10))
+                st.plotly_chart(fig_pv, use_container_width=True)
+
+        # चारही श्रेणींचे स्वतंत्र तक्ते
+        sel_cat = st.selectbox(
+            "🔍 कोणती यादी पाहायची आहे ते निवडा:",
+            [
+                f"🟢 1. Strong Uptrend / Breakout ({len(q1_df)} शेअर्स — खरेदीसाठी मजबूत संकेत)",
+                f"🔴 2. Strong Downtrend / Panic Selling ({len(q2_df)} शेअर्स — विक्रीचा मोठा दबाव)",
+                f"🟡 3. Weak Rally / Trap ({len(q3_df)} शेअर्स — फसवी तेजी, सावध राहावे)",
+                f"🔵 4. Lack of Interest / Pullback ({len(q4_df)} शेअर्स — तात्पुरती घसरण)",
+                f"📋 सर्व Nifty 500 शेअर्स ({len(pv_df)} शेअर्स)"
+            ]
+        )
+
+        if sel_cat.startswith("🟢"):
+            show_df = q1_df
+        elif sel_cat.startswith("🔴"):
+            show_df = q2_df
+        elif sel_cat.startswith("🟡"):
+            show_df = q3_df
+        elif sel_cat.startswith("🔵"):
+            show_df = q4_df
+        else:
+            show_df = pv_df.sort_values(by=ratio_col, ascending=False)
+
+        st.dataframe(
+            show_df.drop(columns=["Signal_Category"], errors="ignore"),
+            use_container_width=True,
+            hide_index=True,
+            height=550,
+            column_config={
+                "CMP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                "1D Chg %": st.column_config.NumberColumn(format="%.2f%%"),
+                "5D Chg %": st.column_config.NumberColumn(format="%.2f%%"),
+                "Current Vol": st.column_config.NumberColumn(format="%d"),
+                "20D Avg Vol": st.column_config.NumberColumn(format="%d"),
+                "2025+ Avg Vol": st.column_config.NumberColumn(format="%d"),
+                "Vol vs 20D (x)": st.column_config.NumberColumn(format="%.2fx"),
+                "Vol vs 2025+ (x)": st.column_config.NumberColumn(format="%.2fx"),
+            }
+        )
+
+
 def render_app():
     top_c1, top_c2 = st.columns((5, 1))
     with top_c1:
@@ -950,21 +1118,23 @@ def render_app():
         st.error("Nifty_500_Stocks.xlsx सापडली नाही! कृपया GitHub रेपॉझिटरी तपासा.")
         return
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "🧮 कॅल्क्युलेटर",
         "🚀 ब्रेकआऊट रिपोर्ट्स",
         "📈 ब्रेकआऊट चार्ट्स",
         "📐 ट्रेंडलाईन चार्ट्स",
-        "📊 ५०० शेअर्स मार्जिन",
+        "📊 प्राईस-व्हॉल्यूम",
+        "📋 ५०० शेअर्स मार्जिन",
         "🏆 ट्रेड जर्नल (P&L)"
     ])
 
     with tab1:
         render_tab1_calculator(df_stocks)
-    render_tab2_and_tab3(tab2, tab5, df_stocks)
+    render_tab2_and_tab3(tab2, tab6, df_stocks)
     render_chart_scanner_tab(tab3, "breakout", "📈 Breakouts Scanner & Live Charts (Full Market Scan)")
     render_chart_scanner_tab(tab4, "trendline", "📐 Auto Trendline Analysis & Charts")
-    render_tab4_journal(tab6)
+    render_price_volume_tab(tab5, df_stocks)
+    render_tab4_journal(tab7)
 
 
 if __name__ == "__main__":
