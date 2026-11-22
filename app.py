@@ -454,12 +454,21 @@ def render_tab4_journal(tab4):
             return
 
         if sheets_data and "All_Trades_Journal" in sheets_data:
-            all_df = sheets_data["All_Trades_Journal"]
+            all_df = sheets_data["All_Trades_Journal"].copy()
 
+            # खातेधारक आणि ब्रोकर फिल्टर
+            f1, f2 = st.columns(2)
             holders = ["सर्व (All)"] + sorted(all_df["ACCOUNT_HOLDER"].dropna().unique().tolist())
-            sel_holder = st.selectbox("👤 खातेधारक निवडा (Account Holder Filter)", holders)
+            brokers = ["सर्व (All)"] + sorted(all_df["BROKER"].dropna().unique().tolist())
+            sel_holder = f1.selectbox("👤 खातेधारक निवडा (Account Holder)", holders)
+            sel_broker = f2.selectbox("🏦 ब्रोकर निवडा (Broker Filter)", brokers)
 
-            filtered_df = all_df if sel_holder == "सर्व (All)" else all_df[all_df["ACCOUNT_HOLDER"] == sel_holder].copy()
+            filtered_df = all_df.copy()
+            if sel_holder != "सर्व (All)":
+                filtered_df = filtered_df[filtered_df["ACCOUNT_HOLDER"] == sel_holder]
+            if sel_broker != "सर्व (All)":
+                filtered_df = filtered_df[filtered_df["BROKER"] == sel_broker]
+
             closed_df = filtered_df[filtered_df["STATUS"].isin(["WIN", "LOSS"])].copy()
             open_cnt = len(filtered_df[filtered_df["STATUS"] == "OPEN"])
 
@@ -477,10 +486,12 @@ def render_tab4_journal(tab4):
             k4.metric("चालू ट्रेड्स (OPEN)", f"{open_cnt}")
 
             if not closed_df.empty:
-                closed_df = closed_df.reset_index(drop=True)
+                closed_df["EXIT_DT"] = pd.to_datetime(closed_df["EXIT_DATE"], errors="coerce")
+                closed_df = closed_df.sort_values(by=["EXIT_DT", "TRADE_ID"]).reset_index(drop=True)
                 closed_df["Trade_No"] = range(1, len(closed_df) + 1)
                 closed_df["Cumulative_PnL"] = closed_df["NET_PNL"].cumsum().round(2)
 
+                # ओळ १: Equity Curve आणि Win/Loss प्रमाण
                 g1, g2 = st.columns(2)
                 with g1:
                     fig_eq = px.area(
@@ -503,31 +514,73 @@ def render_tab4_journal(tab4):
                     fig_pie.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
                     st.plotly_chart(fig_pie, use_container_width=True)
 
-                if sel_holder == "सर्व (All)":
-                    g3, g4 = st.columns(2)
-                    with g3:
-                        acc_grp = closed_df.groupby("ACCOUNT_HOLDER", as_index=False)["NET_PNL"].sum()
-                        acc_grp["Label"] = acc_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K")
-                        fig_acc = px.bar(
-                            acc_grp, x="ACCOUNT_HOLDER", y="NET_PNL", text="Label",
-                            title="👥 खातेधारकानुसार निव्वळ नफा (₹)",
-                            color="NET_PNL", color_continuous_scale=["#E74C3C", "#2ECC71"]
-                        )
-                        fig_acc.update_traces(textposition="outside")
-                        fig_acc.update_layout(height=350, showlegend=False, coloraxis_showscale=False, margin=dict(l=10, r=10, t=45, b=10))
-                        st.plotly_chart(fig_acc, use_container_width=True)
+                # ओळ २: महिनानिहाय नफा-तोटा आलेख (Monthly P&L Chart)
+                valid_m = closed_df.dropna(subset=["EXIT_DT"]).copy()
+                if not valid_m.empty:
+                    valid_m["YearMonth"] = valid_m["EXIT_DT"].dt.to_period("M")
+                    m_grp = valid_m.groupby("YearMonth", as_index=False)["NET_PNL"].sum().sort_values("YearMonth")
+                    m_grp["Month"] = m_grp["YearMonth"].dt.strftime("%b-%Y")
+                    m_grp["Color"] = m_grp["NET_PNL"].apply(lambda v: "Profit" if v >= 0 else "Loss")
+                    m_grp["Label"] = m_grp["NET_PNL"].apply(
+                        lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}"
+                    )
+                    fig_m = px.bar(
+                        m_grp, x="Month", y="NET_PNL", text="Label", color="Color",
+                        title="📅 महिनानिहाय नफा-तोटा आलेख (Monthly Net P&L ₹)",
+                        color_discrete_map={"Profit": "#00A86B", "Loss": "#E74C3C"}
+                    )
+                    fig_m.update_traces(textposition="outside")
+                    fig_m.update_layout(height=360, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
+                    st.plotly_chart(fig_m, use_container_width=True)
+                # ओळ ३: खातेधारक व ब्रोकर तुलना बार चार्ट्स
+                g3, g4 = st.columns(2)
+                with g3:
+                    acc_grp = closed_df.groupby("ACCOUNT_HOLDER", as_index=False)["NET_PNL"].sum()
+                    acc_grp["Label"] = acc_grp["NET_PNL"].apply(
+                        lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}"
+                    )
+                    fig_acc = px.bar(
+                        acc_grp, x="ACCOUNT_HOLDER", y="NET_PNL", text="Label",
+                        title="👥 खातेधारकानुसार निव्वळ नफा (₹)",
+                        color="NET_PNL", color_continuous_scale=["#E74C3C", "#2ECC71"]
+                    )
+                    fig_acc.update_traces(textposition="outside")
+                    fig_acc.update_layout(height=350, showlegend=False, coloraxis_showscale=False, margin=dict(l=10, r=10, t=45, b=10))
+                    st.plotly_chart(fig_acc, use_container_width=True)
 
-                    with g4:
-                        brk_grp = closed_df.groupby("BROKER", as_index=False)["NET_PNL"].sum()
-                        brk_grp["Label"] = brk_grp["NET_PNL"].apply(lambda v: f"₹{v/1000:.1f}K")
-                        fig_brk = px.bar(
-                            brk_grp, x="BROKER", y="NET_PNL", text="Label",
-                            title="🏦 ब्रोकरनुसार निव्वळ नफा (₹)",
-                            color="BROKER"
-                        )
-                        fig_brk.update_traces(textposition="outside")
-                        fig_brk.update_layout(height=350, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
-                        st.plotly_chart(fig_brk, use_container_width=True)
+                with g4:
+                    brk_grp = closed_df.groupby("BROKER", as_index=False)["NET_PNL"].sum()
+                    brk_grp["Label"] = brk_grp["NET_PNL"].apply(
+                        lambda v: f"₹{v/1000:.1f}K" if abs(v) >= 1000 else f"₹{v:,.0f}"
+                    )
+                    fig_brk = px.bar(
+                        brk_grp, x="BROKER", y="NET_PNL", text="Label",
+                        title="🏦 ब्रोकरनुसार निव्वळ नफा (₹)",
+                        color="BROKER"
+                    )
+                    fig_brk.update_traces(textposition="outside")
+                    fig_brk.update_layout(height=350, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
+                    st.plotly_chart(fig_brk, use_container_width=True)
+
+            # डायनॅमिक सारांश तक्ते तयार करणे
+            def build_dynamic_summary(df_sub, group_col, display_label):
+                rows = []
+                for key, grp in df_sub.groupby(group_col):
+                    tot = len(grp)
+                    w = len(grp[grp["STATUS"] == "WIN"])
+                    l = len(grp[grp["STATUS"] == "LOSS"])
+                    wr = round((w / tot) * 100, 1) if tot > 0 else 0.0
+                    rows.append({
+                        display_label: key,
+                        "Closed Trades": tot,
+                        "Wins": w,
+                        "Losses": l,
+                        "Win Rate %": wr,
+                        "Gross P&L (₹)": round(grp["GROSS_PNL"].sum(), 2),
+                        "Charges & Tax (₹)": round(grp["CHARGES_TAX"].sum(), 2),
+                        "Net P&L (₹)": round(grp["NET_PNL"].sum(), 2),
+                    })
+                return add_total_row(pd.DataFrame(rows), display_label)
 
             summary_col_cfg = {
                 "Win Rate %": st.column_config.NumberColumn(format="%.1f%%"),
@@ -536,23 +589,22 @@ def render_tab4_journal(tab4):
                 "Net P&L (₹)": st.column_config.NumberColumn(format="₹%.2f"),
             }
 
-            if sel_holder == "सर्व (All)" and "Account_Holder_Summary" in sheets_data:
+            if not closed_df.empty:
                 st.subheader("👥 खातेधारकानुसार सारांश (TOTAL सह)")
                 st.dataframe(
-                    add_total_row(sheets_data["Account_Holder_Summary"], "Account Holder"),
+                    build_dynamic_summary(closed_df, "ACCOUNT_HOLDER", "Account Holder"),
                     use_container_width=True, hide_index=True, column_config=summary_col_cfg
                 )
 
-            if sel_holder == "सर्व (All)" and "Broker_Summary" in sheets_data:
                 st.subheader("🏦 ब्रोकरनुसार कामगिरी (TOTAL सह)")
                 st.dataframe(
-                    add_total_row(sheets_data["Broker_Summary"], "Broker"),
+                    build_dynamic_summary(closed_df, "BROKER", "Broker"),
                     use_container_width=True, hide_index=True, column_config=summary_col_cfg
                 )
 
             st.subheader("📋 सर्व ट्रेड्सची यादी (Detailed Trades)")
             st.dataframe(
-                filtered_df,
+                filtered_df.drop(columns=["EXIT_DT"], errors="ignore"),
                 use_container_width=True,
                 hide_index=True,
                 height=550,
