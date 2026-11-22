@@ -441,7 +441,6 @@ def add_total_row(df_in, label_col):
     }])
     return pd.concat([df_clean, tot_row], ignore_index=True)
 
-
 def render_tab4_journal(tab4):
     with tab4:
         st.subheader("🏆 एकत्रित ट्रेड जर्नल व इंटरॲक्टिव्ह डॅशबोर्ड")
@@ -456,18 +455,23 @@ def render_tab4_journal(tab4):
         if sheets_data and "All_Trades_Journal" in sheets_data:
             all_df = sheets_data["All_Trades_Journal"].copy()
 
-            # खातेधारक आणि ब्रोकर फिल्टर
-            f1, f2 = st.columns(2)
+            # तिहेरी फिल्टर: खातेधारक, ब्रोकर आणि सेगमेंट
+            f1, f2, f3 = st.columns(3)
             holders = ["सर्व (All)"] + sorted(all_df["ACCOUNT_HOLDER"].dropna().unique().tolist())
             brokers = ["सर्व (All)"] + sorted(all_df["BROKER"].dropna().unique().tolist())
-            sel_holder = f1.selectbox("👤 खातेधारक निवडा (Account Holder)", holders)
-            sel_broker = f2.selectbox("🏦 ब्रोकर निवडा (Broker Filter)", brokers)
+            segments = ["सर्व (All)"] + sorted(all_df["SEGMENT"].dropna().unique().tolist())
+
+            sel_holder = f1.selectbox("👤 खातेधारक (Account Holder)", holders)
+            sel_broker = f2.selectbox("🏦 ब्रोकर (Broker)", brokers)
+            sel_seg = f3.selectbox("📊 सेगमेंट (Intraday / Swing)", segments)
 
             filtered_df = all_df.copy()
             if sel_holder != "सर्व (All)":
                 filtered_df = filtered_df[filtered_df["ACCOUNT_HOLDER"] == sel_holder]
             if sel_broker != "सर्व (All)":
                 filtered_df = filtered_df[filtered_df["BROKER"] == sel_broker]
+            if sel_seg != "सर्व (All)":
+                filtered_df = filtered_df[filtered_df["SEGMENT"] == sel_seg]
 
             closed_df = filtered_df[filtered_df["STATUS"].isin(["WIN", "LOSS"])].copy()
             open_cnt = len(filtered_df[filtered_df["STATUS"] == "OPEN"])
@@ -496,7 +500,7 @@ def render_tab4_journal(tab4):
                 with g1:
                     fig_eq = px.area(
                         closed_df, x="Trade_No", y="Cumulative_PnL",
-                        hover_data=["SYMBOL", "ACCOUNT_HOLDER", "BROKER", "NET_PNL"],
+                        hover_data=["SYMBOL", "ACCOUNT_HOLDER", "BROKER", "SEGMENT", "NET_PNL"],
                         title="📈 एकूण भांडवल वाढ आलेख (Equity Curve ₹)",
                         color_discrete_sequence=["#00A86B"]
                     )
@@ -532,6 +536,7 @@ def render_tab4_journal(tab4):
                     fig_m.update_traces(textposition="outside")
                     fig_m.update_layout(height=360, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
                     st.plotly_chart(fig_m, use_container_width=True)
+
                 # ओळ ३: खातेधारक व ब्रोकर तुलना बार चार्ट्स
                 g3, g4 = st.columns(2)
                 with g3:
@@ -562,7 +567,6 @@ def render_tab4_journal(tab4):
                     fig_brk.update_layout(height=350, showlegend=False, margin=dict(l=10, r=10, t=45, b=10))
                     st.plotly_chart(fig_brk, use_container_width=True)
 
-            # डायनॅमिक सारांश तक्ते तयार करणे
             def build_dynamic_summary(df_sub, group_col, display_label):
                 rows = []
                 for key, grp in df_sub.groupby(group_col):
@@ -590,6 +594,50 @@ def render_tab4_journal(tab4):
             }
 
             if not closed_df.empty:
+                # Intraday विरुद्ध Swing तुलना तक्ता
+                st.subheader("⚡ Intraday विरुद्ध Swing कामगिरी तुलना (TOTAL सह)")
+                st.dataframe(
+                    build_dynamic_summary(closed_df, "SEGMENT", "Segment"),
+                    use_container_width=True, hide_index=True, column_config=summary_col_cfg
+                )
+
+                # टॉप ५ नफा व टॉप ५ तोटा देणारे शेअर्स
+                sym_rows = []
+                for sym, grp in closed_df.groupby("SYMBOL"):
+                    tot = len(grp)
+                    w = len(grp[grp["STATUS"] == "WIN"])
+                    wr = round((w / tot) * 100, 1) if tot > 0 else 0.0
+                    sym_rows.append({
+                        "Symbol": sym,
+                        "Trades": tot,
+                        "Win Rate %": wr,
+                        "Net P&L (₹)": round(grp["NET_PNL"].sum(), 2)
+                    })
+                sym_df = pd.DataFrame(sym_rows)
+                top_winners = sym_df[sym_df["Net P&L (₹)"] > 0].sort_values(by="Net P&L (₹)", ascending=False).head(5)
+                top_losers = sym_df[sym_df["Net P&L (₹)"] < 0].sort_values(by="Net P&L (₹)", ascending=True).head(5)
+
+                stock_col_cfg = {
+                    "Win Rate %": st.column_config.NumberColumn(format="%.1f%%"),
+                    "Net P&L (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                }
+
+                st.subheader("🏅 सर्वाधिक नफा व तोटा देणारे टॉप ५ शेअर्स")
+                t_win_col, t_loss_col = st.columns(2)
+                with t_win_col:
+                    st.markdown("**🟢 टॉप ५ नफा देणारे शेअर्स (Top 5 Winners)**")
+                    if not top_winners.empty:
+                        st.dataframe(top_winners, use_container_width=True, hide_index=True, column_config=stock_col_cfg)
+                    else:
+                        st.info("नफा झालेले शेअर्स नाहीत.")
+
+                with t_loss_col:
+                    st.markdown("**🔴 टॉप ५ तोटा देणारे शेअर्स (Top 5 Losers)**")
+                    if not top_losers.empty:
+                        st.dataframe(top_losers, use_container_width=True, hide_index=True, column_config=stock_col_cfg)
+                    else:
+                        st.info("तोटा झालेले शेअर्स नाहीत.")
+
                 st.subheader("👥 खातेधारकानुसार सारांश (TOTAL सह)")
                 st.dataframe(
                     build_dynamic_summary(closed_df, "ACCOUNT_HOLDER", "Account Holder"),
