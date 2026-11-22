@@ -340,6 +340,89 @@ def render_tab1_calculator(df_stocks):
         "नवीन Trailing SL": [f"₹{active['breakeven']:,.2f}", f"₹{entry + 0.5 * risk_pts:,.2f}", f"₹{entry + risk_pts:,.2f}", f"₹{entry + 2 * risk_pts:,.2f}"],
     })
     st.dataframe(tsl_df, use_container_width=True, hide_index=True)
+def render_tab1_calculator(df_stocks):
+    col_b, col_p = st.columns(2)
+    broker = col_b.selectbox("ब्रोकर निवडा", ["Dhan", "Zerodha"])
+    product = col_p.selectbox("प्रॉडक्ट प्रकार", ["MTF Swing", "MIS Intraday"])
+
+    symbols = df_stocks["Symbol"].tolist()
+    default_idx = symbols.index("RELIANCE") if "RELIANCE" in symbols else 0
+    selected_sym = st.selectbox("🔍 Nifty 500 शेअर निवडा (टाईप करून शोधा)", symbols, index=default_idx)
+
+    stock_row = df_stocks[df_stocks["Symbol"] == selected_sym].to_dict("records").pop(0)
+    live_cmp = float(stock_row.get("Live_CMP", 0.0))
+
+    st.info(f"**{stock_row['Company']}** ({stock_row['Industry']}) | लाइव्ह भाव: **₹{live_cmp:,.2f}**")
+
+    c1, c2 = st.columns(2)
+    capital = c1.number_input("तुमचे भांडवल (₹)", min_value=1000.0, value=10000.0, step=1000.0)
+    risk_pct = c2.number_input("प्रति ट्रेड जोखीम (%)", min_value=0.1, max_value=20.0, value=2.0, step=0.5)
+
+    default_entry = live_cmp if live_cmp > 0 else 1300.0
+    c3, c4 = st.columns(2)
+    entry = c3.number_input("खरेदी किंमत Entry (₹)", min_value=1.0, value=float(default_entry), step=1.0)
+    sl = c4.number_input("स्टॉप लॉस SL (₹)", min_value=0.5, value=round(float(default_entry) * 0.97, 2), step=1.0)
+
+    c5, c6, c7 = st.columns(3)
+    t1 = c5.number_input("Target 1 (50% Book ₹)", min_value=1.0, value=round(float(default_entry) * 1.05, 2), step=1.0)
+    t2 = c6.number_input("Target 2 (Final ₹)", min_value=1.0, value=round(float(default_entry) * 1.10, 2), step=1.0)
+    days = c7.number_input("होल्डिंग दिवस", min_value=0, max_value=365, value=10 if product == "MTF Swing" else 0)
+
+    dhan_m = stock_row["MIS"] if product == "MIS Intraday" else stock_row["Dhan_MTF"]
+    zero_m = stock_row["MIS"] if product == "MIS Intraday" else stock_row["Zerodha_MTF"]
+
+    res_dhan = calculate_trade("Dhan", product, capital, entry, sl, t1, t2, days, risk_pct, dhan_m)
+    res_zero = calculate_trade("Zerodha", product, capital, entry, sl, t1, t2, days, risk_pct, zero_m)
+    active = res_dhan if broker == "Dhan" else res_zero
+
+    st.divider()
+    st.subheader(f"🎯 {broker} ({product}) निकाल")
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Safe Qty (२% रिस्क)", f"{active['safe_qty']} शेअर्स", f"Max Qty: {active['max_qty']}")
+    m2.metric("लीव्हरेज / मार्जिन", f"{active['leverage']}x", f"{dhan_m if broker=='Dhan' else zero_m}%")
+    m3.metric("तुमचे वापरलेले भांडवल", f"₹{active['margin_used']:,.2f}", f"खरेदी: ₹{active['trade_val']:,.2f}")
+
+    m4, m5, m6 = st.columns(3)
+    m4.metric("Target 2 निव्वळ नफा", f"₹{active['net_profit']:,.2f}", f"ROI: {active['roi']}%")
+    m5.metric("SL वर प्रत्यक्ष तोटा", f"₹{active['net_loss']:,.2f}", f"Breakeven: ₹{active['breakeven']:,.2f}")
+    m6.metric("एकूण कर व व्याज", f"₹{active['total_charges']:,.2f}", f"व्याज: ₹{active['interest']:,.2f}")
+
+    if product == "MTF Swing":
+        st.warning(f"🚨 **MTF Margin Call धोक्याची किंमत:** ₹{active['danger_price']:,.2f} (फंडिंग रक्कम: ₹{active['funded_amt']:,.2f})")
+
+    st.subheader("💰 ५०% अर्धा नफा बुकिंग प्लॅनर")
+    partial_df = pd.DataFrame({
+        "टप्पा (Stage)": ["टप्पा १: Target 1 (50% Book)", "टप्पा २: Target 2 (उरलेले 50%)", "एकूण एकत्रित निव्वळ नफा"],
+        "विक्री किंमत": [f"₹{t1:,.2f}", f"₹{t2:,.2f}", "-"],
+        "शेअर्स (Qty)": [f"{active['half_qty']} शेअर्स", f"{active['rem_qty']} शेअर्स", f"{active['safe_qty']} शेअर्स"],
+        "निव्वळ नफा": [f"₹{active['p1_profit']:,.2f}", f"₹{active['p2_profit']:,.2f}", f"₹{active['partial_total']:,.2f}"]
+    })
+    st.dataframe(partial_df, use_container_width=True, hide_index=True)
+
+    st.subheader("⚔️ Dhan विरुद्ध Zerodha थेट तुलना")
+    comp_df = pd.DataFrame({
+        "तपशील": ["मार्जिन %", "ब्रोकरेज", "MTF व्याज", "सरकारी कर व DP", "एकूण खर्च", "Target 2 निव्वळ नफा"],
+        "Dhan": [f"{dhan_m}%", f"₹{res_dhan['brokerage']:,.2f}", f"₹{res_dhan['interest']:,.2f}", f"₹{res_dhan['taxes']:,.2f}", f"₹{res_dhan['total_charges']:,.2f}", f"₹{res_dhan['net_profit']:,.2f}"],
+        "Zerodha": [f"{zero_m}%", f"₹{res_zero['brokerage']:,.2f}", f"₹{res_zero['interest']:,.2f}", f"₹{res_zero['taxes']:,.2f}", f"₹{res_zero['total_charges']:,.2f}", f"₹{res_zero['net_profit']:,.2f}"],
+    })
+    st.dataframe(comp_df, use_container_width=True, hide_index=True)
+
+    diff = round(res_dhan["net_profit"] - res_zero["net_profit"], 2)
+    if diff > 0:
+        st.success(f"✅ **Dhan** वर तुम्हाला **₹{diff:,.2f} जास्त निव्वळ नफा** उरतो!")
+    elif diff < 0:
+        st.success(f"✅ **Zerodha** वर तुम्हाला **₹{abs(diff):,.2f} जास्त निव्वळ नफा** उरतो!")
+
+    st.subheader("🛡️ Trailing Stop-Loss (TSL) प्लॅनर")
+    risk_pts = abs(entry - sl)
+    tsl_df = pd.DataFrame({
+        "टप्पा": ["1R (1:1)", "1.5R (1:1.5)", "2R (1:2)", "3R (1:3)"],
+        "Trigger किंमत": [f"₹{entry + risk_pts:,.2f}", f"₹{entry + 1.5 * risk_pts:,.2f}", f"₹{entry + 2 * risk_pts:,.2f}", f"₹{entry + 3 * risk_pts:,.2f}"],
+        "नवीन Trailing SL": [f"₹{active['breakeven']:,.2f}", f"₹{entry + 0.5 * risk_pts:,.2f}", f"₹{entry + risk_pts:,.2f}", f"₹{entry + 2 * risk_pts:,.2f}"],
+    })
+    st.dataframe(tsl_df, use_container_width=True, hide_index=True)
+
 
 def get_smart_col_config(df):
     """रिपोर्टमधील किंमत आणि रकमेच्या कॉलम्सना आपोआप ₹ फॉरमॅट लावणे"""
@@ -904,7 +987,6 @@ def render_app():
         if st.button("🔄 रिफ्रेश करा", key="global_refresh_btn", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
-
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🧮 कॅल्क्युलेटर",
