@@ -772,7 +772,12 @@ def download_chart_bytes(file_id):
 
 def render_chart_scanner_tab(tab_obj, mode, tab_heading):
     with tab_obj:
-        st.subheader(tab_heading)
+        h_col1, h_col2 = st.columns((4, 1))
+        h_col1.subheader(tab_heading)
+        if h_col2.button("🔄 रिफ्रेश करा", key=f"ref_{mode}"):
+            st.cache_data.clear()
+            st.rerun()
+
         folders, f_err = get_daily_date_folders()
         if f_err:
             st.info(f_err)
@@ -780,6 +785,7 @@ def render_chart_scanner_tab(tab_obj, mode, tab_heading):
         if not folders:
             st.warning("अजून कोणतेही तारीख फोल्डर सापडले नाही.")
             return
+
 
         folder_map = {f.get("name"): f.get("id") for f in folders}
         c_date, c_view = st.columns([1, 2])
