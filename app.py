@@ -601,18 +601,21 @@ def render_tab4_journal(tab4):
                     use_container_width=True, hide_index=True, column_config=summary_col_cfg
                 )
 
-                # टॉप ५ नफा व टॉप ५ तोटा देणारे शेअर्स
+                # टॉप ५ नफा व टॉप ५ तोटा देणारे शेअर्स (Standardized Symbol + Company Name सह)
                 sym_rows = []
                 for sym, grp in closed_df.groupby("SYMBOL"):
                     tot = len(grp)
                     w = len(grp[grp["STATUS"] == "WIN"])
                     wr = round((w / tot) * 100, 1) if tot > 0 else 0.0
+                    comp_name = grp["COMPANY_NAME"].dropna().iloc[0] if "COMPANY_NAME" in grp.columns and not grp["COMPANY_NAME"].dropna().empty else sym
                     sym_rows.append({
                         "Symbol": sym,
+                        "Company": comp_name,
                         "Trades": tot,
                         "Win Rate %": wr,
                         "Net P&L (₹)": round(grp["NET_PNL"].sum(), 2)
                     })
+
                 sym_df = pd.DataFrame(sym_rows)
                 top_winners = sym_df[sym_df["Net P&L (₹)"] > 0].sort_values(by="Net P&L (₹)", ascending=False).head(5)
                 top_losers = sym_df[sym_df["Net P&L (₹)"] < 0].sort_values(by="Net P&L (₹)", ascending=True).head(5)
