@@ -427,6 +427,8 @@ def render_app():
 
             st.subheader("📋 सर्व ट्रेड्सची यादी (Detailed Trades)")
 
-st.dataframe(filtered_df, use_container_width=True, hide_index=True)
-if name == "main":
-render_app()
+            st.dataframe(filtered_df, use_container_width=True, hide_index=True)
+
+
+if __name__ == "__main__":
+    render_app()
